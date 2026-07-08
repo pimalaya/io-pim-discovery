@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added a per-endpoint authentication probe to the search: after the mechanisms run, every collected HTTP config (JMAP, CalDAV, CardDAV) is asked which schemes it actually accepts through its unauthenticated 401 `WWW-Authenticate` (per PACC §5.4.2 and RFC 9110 §11.6.1, probing the endpoint then the service's well-known walk), and its password and bearer methods are refined accordingly, OAuth methods untouched. Account-level configuration documents cannot express per-service schemes: fastmail's PACC claims password support account-wide, while its JMAP session endpoint only advertises `Bearer` and its CardDAV root advertises `Basic` and `Bearer`; the probe now makes each config say exactly that. The probe lives in the new `rfc9110` module (the `WWW-Authenticate` parser moved there from the RFC 8620 probe), and first mode probes its configs before completing.
+
 - Added the `Bearer` authentication method to search configs, detected from the JMAP session probe.
 
   The RFC 8620 well-known probe now reads the authentication schemes the session endpoint advertises through `WWW-Authenticate` on its unauthenticated 401, and the resulting config's methods derive from them: `basic` means password login, `bearer` a bearer token such as a provider-issued API token (fastmail's JMAP API only accepts the latter; a valid token sent as Basic credentials 401s). Configs for the same service, endpoint and username now merge their authentication methods across mechanisms instead of duplicating the entry, so a PACC-advertised endpoint gains the probe-detected schemes.
@@ -36,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changed the RFC 6764 resolve coroutine to survive failed SRV lookups: an unreachable resolver now falls back to the `.well-known` probe on the domain itself instead of failing the whole resolve.
 
 ### Fixed
+
+- Fixed the search duplicating one service reached under two names: HTTP endpoints now compare as normalized URLs across mechanisms (a trailing slash or an explicit default port no longer splits an entry), and an endpoint whose host is a subdomain of an already collected one merges into it as a rotated backend name, the parent host keeping the entry (fastmail's SRV records answer with dNNNNNN.carddav.fastmail.com shards under the carddav.fastmail.com its PACC document advertises, so the search listed both).
+
+- Fixed the assumed JMAP authentication order when the session endpoint advertises no scheme on its 401: the bearer token now comes first, password second (the JMAP ecosystem is token-first; a wrongly assumed method fails visibly at the connection check while a missing one is a dead end).
 
 - Fixed the PACC kebab-case keys being renamed on serialization only: `oauth-public` and `content-type` now also deserialize from their wire names, so a provider's public OAuth issuer (e.g. fastmail's) reaches the parsed document and the search configs instead of being silently dropped.
 

@@ -13,6 +13,7 @@ use alloc::{
 };
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{
     autoconfig::types::{AuthenticationType, Autoconfig, SecurityType, ServerType},
@@ -44,6 +45,37 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
+    /// Refines the password and bearer methods from the schemes the
+    /// service endpoint advertised on its unauthenticated 401 (PACC
+    /// §5.4.2): the endpoint's own advertisement beats any
+    /// account-level claim, since a provider may take passwords on one
+    /// service and only bearer tokens on another (fastmail does).
+    /// OAuth methods stay untouched (they describe how to obtain a
+    /// token, not a scheme), and schemes naming neither `basic` nor
+    /// `bearer` leave the config as discovered.
+    pub fn refine_auth(&mut self, schemes: &[String]) {
+        let mut auth = Vec::new();
+
+        for scheme in schemes {
+            match scheme.as_str() {
+                "basic" => auth.push(AuthMethod::Password),
+                "bearer" => auth.push(AuthMethod::Bearer),
+                _ => (),
+            }
+        }
+        if auth.is_empty() {
+            return;
+        }
+
+        for method in self.auth.drain(..) {
+            let probed = matches!(method, AuthMethod::Password | AuthMethod::Bearer);
+            if !probed && !auth.contains(&method) {
+                auth.push(method);
+            }
+        }
+        self.auth = auth;
+    }
+
     /// Flattens a Mozilla autoconfig document into one config per
     /// incoming/outgoing server. Servers without a hostname are
     /// skipped; a missing port falls back to the well-known port of
@@ -242,7 +274,10 @@ impl ServiceConfig {
     /// authentication methods derive from the schemes the session
     /// endpoint advertised on its unauthenticated 401 (`basic` means
     /// password login, `bearer` a bearer token); with no advertisement
-    /// both are assumed.
+    /// both are assumed, the bearer token first: the JMAP ecosystem is
+    /// token-first (fastmail only accepts API tokens), and a wrongly
+    /// assumed method fails visibly at the connection check while a
+    /// missing one is a dead end.
     pub fn from_jmap(url: impl ToString, schemes: &[String]) -> Self {
         let mut auth = Vec::new();
 
@@ -255,7 +290,7 @@ impl ServiceConfig {
         }
 
         if auth.is_empty() {
-            auth = vec![AuthMethod::Password, AuthMethod::Bearer];
+            auth = vec![AuthMethod::Bearer, AuthMethod::Password];
         }
 
         Self {
@@ -294,6 +329,107 @@ pub enum Endpoint {
     },
     /// HTTP endpoint (JMAP, CalDAV, CardDAV, WebDAV).
     Http(String),
+}
+
+impl Endpoint {
+    /// Reports whether two endpoints reach the same service: byte
+    /// equality, or normalized-URL equality for HTTP endpoints, so
+    /// mechanisms disagreeing only on a trailing slash or an explicit
+    /// default port still merge.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        if self == other {
+            return true;
+        }
+
+        match (self, other) {
+            (Self::Http(a), Self::Http(b)) => match (Url::parse(a), Url::parse(b)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Reports whether this HTTP endpoint's host is a subdomain of the
+    /// other's: the mark of a rotated backend behind a provider's
+    /// stable service name (fastmail's SRV records answer with
+    /// `dNNNNNN.carddav.fastmail.com` shards under the
+    /// `carddav.fastmail.com` its own configuration document
+    /// advertises).
+    pub fn subdomain_of(&self, other: &Self) -> bool {
+        let (Self::Http(a), Self::Http(b)) = (self, other) else {
+            return false;
+        };
+        let (Ok(a), Ok(b)) = (Url::parse(a), Url::parse(b)) else {
+            return false;
+        };
+        let (Some(a), Some(b)) = (a.host_str(), b.host_str()) else {
+            return false;
+        };
+
+        a.len() > b.len() && a.ends_with(b) && a.as_bytes()[a.len() - b.len() - 1] == b'.'
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{string::ToString, vec};
+
+    use crate::search::types::{AuthMethod, ConfigSource, Endpoint, Service, ServiceConfig};
+
+    #[test]
+    fn probed_schemes_beat_account_level_claims() {
+        let mut config = ServiceConfig {
+            service: Service::Jmap,
+            endpoint: Endpoint::Http("https://api.example.com/jmap/session".to_string()),
+            username: None,
+            auth: vec![
+                AuthMethod::OauthIssuer("https://api.example.com".to_string()),
+                AuthMethod::Password,
+            ],
+            source: ConfigSource::Pacc,
+        };
+
+        // The endpoint advertises bearer only: the account-level
+        // password claim goes, the OAuth issuer stays.
+        config.refine_auth(&["bearer".to_string()]);
+        assert_eq!(
+            config.auth,
+            vec![
+                AuthMethod::Bearer,
+                AuthMethod::OauthIssuer("https://api.example.com".to_string()),
+            ],
+        );
+
+        // Unknown schemes leave the config as discovered.
+        config.refine_auth(&["negotiate".to_string()]);
+        assert!(config.auth.contains(&AuthMethod::Bearer));
+    }
+
+    #[test]
+    fn http_endpoints_compare_normalized() {
+        let bare = Endpoint::Http("https://carddav.example.com".to_string());
+        let slash = Endpoint::Http("https://carddav.example.com/".to_string());
+        let port = Endpoint::Http("https://carddav.example.com:443/".to_string());
+        let other = Endpoint::Http("https://carddav.example.com/dav".to_string());
+
+        assert!(bare.equivalent(&slash));
+        assert!(bare.equivalent(&port));
+        assert!(!bare.equivalent(&other));
+    }
+
+    #[test]
+    fn subdomain_marks_a_rotated_backend() {
+        let parent = Endpoint::Http("https://carddav.example.com".to_string());
+        let shard = Endpoint::Http("https://d063023.carddav.example.com/dav".to_string());
+        let sibling = Endpoint::Http("https://caldav.example.com".to_string());
+        let lookalike = Endpoint::Http("https://evilcarddav.example.com".to_string());
+
+        assert!(shard.subdomain_of(&parent));
+        assert!(!parent.subdomain_of(&shard));
+        assert!(!sibling.subdomain_of(&parent));
+        assert!(!lookalike.subdomain_of(&parent));
+    }
 }
 
 /// Transport security of a TCP service endpoint.

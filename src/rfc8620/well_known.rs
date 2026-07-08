@@ -13,21 +13,21 @@
 //! walk and the [`DiscoveryYield`] plumbing so the std client can
 //! route each hop through the matching stream.
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 
 use io_http::{
     coroutine::{HttpCoroutine, HttpCoroutineState, HttpYield},
     rfc8615::well_known::{Http11WellKnown, Http11WellKnownError},
-    rfc9110::{request::HttpRequest, response::HttpResponse},
+    rfc9110::request::HttpRequest,
 };
 use log::trace;
 use thiserror::Error;
 use url::Url;
 
-use crate::coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield};
+use crate::{
+    coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
+    rfc9110::auth_schemes,
+};
 
 /// Redirect hops followed before giving up on a looping chain.
 const MAX_HOPS: u8 = 5;
@@ -132,30 +132,4 @@ impl DiscoveryCoroutine for WellKnownJmap {
             }
         }
     }
-}
-
-/// Lowercased scheme names of every `WWW-Authenticate` challenge
-/// (RFC 9110 §11.6.1). Challenges and their parameters share the comma
-/// separator, so a chunk only counts as a scheme when its first token
-/// carries no `=` (parameters always do).
-fn auth_schemes(response: &HttpResponse) -> Vec<String> {
-    let mut schemes = Vec::new();
-
-    for (name, value) in &response.headers {
-        if !name.eq_ignore_ascii_case("WWW-Authenticate") {
-            continue;
-        }
-
-        for chunk in value.split(',') {
-            let Some(token) = chunk.split_whitespace().next() else {
-                continue;
-            };
-
-            if !token.contains('=') {
-                schemes.push(token.to_ascii_lowercase().to_string());
-            }
-        }
-    }
-
-    schemes
 }

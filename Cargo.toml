@@ -88,5 +88,5 @@ ipconfig = { version = "0.3", optional = true }
 [patch.crates-io]
 # TODO: restore when the domain new API is released:
 # domain = { git = "https://github.com/nlnetlabs/domain", rev = "b30087125c13e71010d9783a1bcdd9eb9fa3f336" }
-io-http.path = "../io-http"
+io-http.git = "https://github.com/pimalaya/io-http"
 pimalaya-cli.git = "https://github.com/pimalaya/cli"

@@ -686,6 +686,7 @@ dependencies = [
 [[package]]
 name = "io-http"
 version = "0.1.1"
+source = "git+https://github.com/pimalaya/io-http#0ef0eb6a73f6f02853c09f95f669a46c01b3b3f5"
 dependencies = [
  "anyhow",
  "base64",

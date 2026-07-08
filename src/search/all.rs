@@ -6,7 +6,12 @@
 //! on Google Workspace or Microsoft 365), PACC, the Mozilla
 //! autoconfig locations (ISP main, ISP fallback, the mailconf TXT
 //! redirect, ISPDB), RFC 6186 SRV records, the RFC 6764
-//! CalDAV/CardDAV resolve and the RFC 8620 JMAP resolve.
+//! CalDAV/CardDAV resolve and the RFC 8620 JMAP resolve. A final probe
+//! then asks each collected HTTP endpoint which authentication schemes
+//! it actually advertises on its unauthenticated 401 (PACC §5.4.2) and
+//! refines the config's password and bearer methods accordingly:
+//! account-level documents cannot express per-service schemes, the
+//! endpoint itself can.
 //!
 //! Mechanism failures are logged and skipped: only an invalid email
 //! address fails the whole search. Mechanisms irrelevant to the
@@ -33,9 +38,10 @@ use crate::{
     rfc6186::discover::DiscoverySrv,
     rfc6764::{resolve::ResolveDav, types::DavService},
     rfc8620::resolve::ResolveJmap,
+    rfc9110::ProbeAuth,
     search::{
         providers::Provider,
-        types::{ConfigSource, Service, ServiceConfig},
+        types::{ConfigSource, Endpoint, Service, ServiceConfig},
     },
 };
 
@@ -112,7 +118,11 @@ impl SearchAll {
     /// Keeps the configs matching the requested services. A config
     /// whose service, endpoint and username were already collected by
     /// an earlier mechanism merges its authentication methods into the
-    /// existing config instead of duplicating it.
+    /// existing config instead of duplicating it. HTTP endpoints
+    /// compare as normalized URLs, and a subdomain of an already
+    /// collected host counts as the same service reached through a
+    /// rotated backend name: the parent host wins the endpoint, since
+    /// only it is worth persisting in an account.
     fn collect(&mut self, configs: Vec<ServiceConfig>) {
         for config in configs {
             if !self.wants(config.service) {
@@ -121,12 +131,18 @@ impl SearchAll {
 
             let existing = self.configs.iter_mut().find(|c| {
                 c.service == config.service
-                    && c.endpoint == config.endpoint
                     && c.username == config.username
+                    && (c.endpoint.equivalent(&config.endpoint)
+                        || c.endpoint.subdomain_of(&config.endpoint)
+                        || config.endpoint.subdomain_of(&c.endpoint))
             });
 
             match existing {
                 Some(existing) => {
+                    if existing.endpoint.subdomain_of(&config.endpoint) {
+                        existing.endpoint = config.endpoint;
+                        existing.source = config.source;
+                    }
                     for method in config.auth {
                         if !existing.auth.contains(&method) {
                             existing.auth.push(method);
@@ -138,17 +154,42 @@ impl SearchAll {
         }
     }
 
+    /// Starts the next endpoint auth probe of the queue, or ends the
+    /// search when every target is exhausted.
+    fn probe_next(
+        &mut self,
+        mut queue: Vec<ProbeTask>,
+    ) -> DiscoveryCoroutineState<DiscoveryYield, Result<Vec<ServiceConfig>, SearchError>> {
+        loop {
+            let Some(mut task) = queue.pop() else {
+                return self.advance(Step::End);
+            };
+            if task.urls.is_empty() {
+                continue;
+            }
+
+            let url = task.urls.remove(0);
+            debug!("probe endpoint authentication schemes");
+            trace!("{url}");
+
+            let probe = ProbeAuth::new(url);
+            self.state = State::Probe { queue, task, probe };
+            return self.resume(None);
+        }
+    }
+
     /// Enters the first applicable mechanism at or after `step`, or
-    /// completes when none is left. In first mode, completes as soon
-    /// as any config has been collected.
+    /// completes when none is left. In first mode, the auth probe runs
+    /// as soon as any config has been collected and the search
+    /// completes right after it.
     fn advance(
         &mut self,
         mut step: Step,
     ) -> DiscoveryCoroutineState<DiscoveryYield, Result<Vec<ServiceConfig>, SearchError>> {
-        if self.first && !self.configs.is_empty() {
+        if self.first && !self.configs.is_empty() && !matches!(step, Step::Probe | Step::End) {
             debug!("stop search at first mechanism yielding configs");
             trace!("{:?}", self.configs);
-            return DiscoveryCoroutineState::Complete(Ok(mem::take(&mut self.configs)));
+            step = Step::Probe;
         }
 
         loop {
@@ -270,7 +311,25 @@ impl SearchAll {
                         self.state = State::Jmap(resolve);
                         return self.resume(None);
                     }
-                    step = Step::End;
+                    step = Step::Probe;
+                }
+                Step::Probe => {
+                    let queue: Vec<ProbeTask> = self
+                        .configs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, config)| ProbeTask {
+                            index,
+                            urls: probe_urls(config),
+                        })
+                        .filter(|task| !task.urls.is_empty())
+                        .collect();
+
+                    if queue.is_empty() {
+                        step = Step::End;
+                        continue;
+                    }
+                    return self.probe_next(queue);
                 }
                 Step::End => {
                     debug!("end of config search");
@@ -507,7 +566,35 @@ impl DiscoveryCoroutine for SearchAll {
                             trace!("{err:?}");
                         }
                     }
-                    self.advance(Step::End)
+                    self.advance(Step::Probe)
+                }
+            },
+            State::Probe {
+                mut queue,
+                task,
+                mut probe,
+            } => match probe.resume(arg) {
+                DiscoveryCoroutineState::Yielded(y) => {
+                    self.state = State::Probe { queue, task, probe };
+                    DiscoveryCoroutineState::Yielded(y)
+                }
+                DiscoveryCoroutineState::Complete(res) => {
+                    match res {
+                        Ok(schemes) if !schemes.is_empty() => {
+                            if let Some(config) = self.configs.get_mut(task.index) {
+                                config.refine_auth(&schemes);
+                            }
+                        }
+                        // Nothing learned at this URL: the task's next
+                        // URL (the well-known walk) gets its turn.
+                        Ok(_) => queue.push(task),
+                        Err(err) => {
+                            debug!("skip failed auth probe");
+                            trace!("{err:?}");
+                            queue.push(task);
+                        }
+                    }
+                    self.probe_next(queue)
                 }
             },
             State::Done => panic!("SearchAll::resume called after completion"),
@@ -530,6 +617,7 @@ enum Step {
     Caldav,
     Carddav,
     Jmap,
+    Probe,
     End,
 }
 
@@ -547,6 +635,45 @@ enum State {
     Caldav(ResolveDav),
     Carddav(ResolveDav),
     Jmap(ResolveJmap),
+    Probe {
+        queue: Vec<ProbeTask>,
+        task: ProbeTask,
+        probe: ProbeAuth,
+    },
     #[default]
     Done,
+}
+
+/// One config's pending auth probe: its index in the collected list
+/// and the URLs left to try, in order.
+struct ProbeTask {
+    index: usize,
+    urls: Vec<Url>,
+}
+
+/// The URLs whose unauthenticated 401 may advertise the config's
+/// schemes: the HTTP endpoint itself, then the service's well-known
+/// path for the DAV services (some servers, fastmail among them, 404
+/// the bare origin but guard the well-known walk).
+fn probe_urls(config: &ServiceConfig) -> Vec<Url> {
+    let Endpoint::Http(raw) = &config.endpoint else {
+        return Vec::new();
+    };
+    let Ok(url) = Url::parse(raw) else {
+        return Vec::new();
+    };
+
+    let mut urls = vec![url.clone()];
+    let well_known = match config.service {
+        Service::Caldav => Some("/.well-known/caldav"),
+        Service::Carddav => Some("/.well-known/carddav"),
+        _ => None,
+    };
+    if let Some(path) = well_known {
+        let mut probe = url;
+        probe.set_path(path);
+        urls.push(probe);
+    }
+
+    urls
 }

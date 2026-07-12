@@ -41,10 +41,10 @@ This repository ships three things:
 - **RFC 8620** JMAP service autodiscovery <sup>[rfc8620](https://datatracker.ietf.org/doc/html/rfc8620)</sup> (requires `rfc8620` feature):
   - DNS SRV: `_jmap._tcp` origin lookup
   - `/.well-known/jmap` session probe following any redirect chain (a terminal 2xx or 401 locates the session resource; anything else means no JMAP), plus a combined `domain -> session URL` resolve chaining SRV then `.well-known`
-- **Unified search** from a single email address (requires `search` feature):
+- **Unified compose** from a single email address (part of the `cli` feature; it is a thread-spawning std client rather than an I/O-free coroutine):
   - chains fixed provider rules (Google, Microsoft, matched by domain then by MX records), PACC, autoconfig, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV and RFC 8620 JMAP discovery
   - reduces everything to one list of service configs (endpoint, username, authentication methods: password, OAuth 2.0 authorization code grant, OAuth 2.0 device authorization grant, OAuth 2.0 issuer)
-  - search-all collects configs from every mechanism, search-first stops at the first mechanism yielding one
+  - compose-all collects configs from every mechanism, compose-first stops at the first mechanism yielding one
 - **PACC** discovery support <sup>[draft-ietf-mailmaint-pacc-02](https://datatracker.ietf.org/doc/html/draft-ietf-mailmaint-pacc-02)</sup> (requires `pacc` feature):
   - Well-known JSON configuration fetch
   - SHA-256 digest verification against the `_ua-auto-config` TXT record
@@ -183,11 +183,11 @@ pim-discovery autoconfig user fastmail.com mx
 pim-discovery autoconfig user fastmail.com mailconf
 ```
 
-Search every mechanism for service configs from a single email address (add `--first` to stop at the first mechanism yielding configs, `--service` to restrict the searched services):
+Compose service configs from a single email address by chaining every mechanism (add `--first` to stop at the first mechanism yielding configs, `--service` to restrict the composed services):
 
 ```sh
-pim-discovery search user@fastmail.com
-pim-discovery search user@fastmail.com --first --service carddav
+pim-discovery compose user@fastmail.com
+pim-discovery compose user@fastmail.com --first --service carddav
 ```
 
 Run RFC 6186 SRV discovery (top-level subcommand):

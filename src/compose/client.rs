@@ -1,6 +1,6 @@
-//! # Standard, blocking search client
+//! # Standard, blocking compose client
 //!
-//! [`SearchClientStd`] orchestrates the discovery bricks in parallel:
+//! [`ComposeClientStd`] orchestrates the discovery bricks in parallel:
 //! one OS thread per mechanism, each pumping its coroutine through
 //! its own [`StreamPool`], the outputs reduced in mechanism-priority
 //! order by the pure [`ConfigCollector`]. A final probe pass then
@@ -10,7 +10,7 @@
 //! per config.
 //!
 //! Mechanism failures are logged and skipped: only an invalid email
-//! address fails the whole search. Mechanisms irrelevant to the
+//! address fails the whole compose. Mechanisms irrelevant to the
 //! requested services are never started.
 
 use std::thread;
@@ -28,37 +28,37 @@ use url::Url;
 
 use crate::{
     autoconfig::{isp::DiscoveryIsp, mailconf::DiscoveryMailconf, mx::DiscoveryDnsMx},
+    compose::{
+        collect::ConfigCollector,
+        providers::Provider,
+        types::{ConfigSource, Service, ServiceConfig},
+    },
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
     pacc::discover::DiscoveryPacc,
     rfc6186::discover::DiscoverySrv,
     rfc6764::{resolve::ResolveDav, types::DavService},
     rfc8620::resolve::ResolveJmap,
     rfc9110::ProbeAuth,
-    search::{
-        collect::ConfigCollector,
-        providers::Provider,
-        types::{ConfigSource, Service, ServiceConfig},
-    },
     shared::pool::StreamPool,
 };
 
 const READ_BUFFER_SIZE: usize = 8 * 1024;
 
-/// Errors returned by [`SearchClientStd`].
+/// Errors returned by [`ComposeClientStd`].
 #[derive(Debug, Error)]
-pub enum SearchClientStdError {
+pub enum ComposeClientStdError {
     /// The input is not a valid `local@domain` email address.
-    #[error("Search email `{0}` is missing the `@` separator")]
+    #[error("Email address `{0}` is missing the `@` separator")]
     InvalidEmail(String),
 }
 
-/// Std-blocking parallel search orchestrator.
-pub struct SearchClientStd {
+/// Std-blocking parallel compose orchestrator.
+pub struct ComposeClientStd {
     dns: Url,
     tls: Tls,
 }
 
-impl SearchClientStd {
+impl ComposeClientStd {
     /// Builds a client that resolves DNS lookups through `dns` (a
     /// `tcp://host:port` URL pointing at a DNS-over-TCP resolver) and
     /// runs the HTTPS-bound mechanisms over `tls`.
@@ -69,41 +69,41 @@ impl SearchClientStd {
     /// Runs every mechanism in parallel and returns all configs found
     /// for `email`, restricted to `services` (empty means all
     /// services).
-    pub fn search_all(
+    pub fn compose_all(
         &self,
         email: &str,
         services: BTreeSet<Service>,
-    ) -> Result<Vec<ServiceConfig>, SearchClientStdError> {
-        self.search(email, services, false)
+    ) -> Result<Vec<ServiceConfig>, ComposeClientStdError> {
+        self.compose(email, services, false)
     }
 
-    /// Same mechanism set as [`search_all`](Self::search_all), but
+    /// Same mechanism set as [`compose_all`](Self::compose_all), but
     /// keeps only the configs of the highest-priority mechanism that
     /// produced any; an empty result means no mechanism produced
     /// anything. The mechanisms still run in parallel, so this trades
     /// no latency, only output size.
-    pub fn search_first(
+    pub fn compose_first(
         &self,
         email: &str,
         services: BTreeSet<Service>,
-    ) -> Result<Vec<ServiceConfig>, SearchClientStdError> {
-        self.search(email, services, true)
+    ) -> Result<Vec<ServiceConfig>, ComposeClientStdError> {
+        self.compose(email, services, true)
     }
 
-    fn search(
+    fn compose(
         &self,
         email: &str,
         services: BTreeSet<Service>,
         first: bool,
-    ) -> Result<Vec<ServiceConfig>, SearchClientStdError> {
+    ) -> Result<Vec<ServiceConfig>, ComposeClientStdError> {
         let email = email.trim();
 
         let Some((local, domain)) = email.split_once('@') else {
-            return Err(SearchClientStdError::InvalidEmail(email.to_string()));
+            return Err(ComposeClientStdError::InvalidEmail(email.to_string()));
         };
         let domain = domain.trim_matches('.').to_ascii_lowercase();
 
-        debug!("begin config search");
+        debug!("begin config compose");
         trace!("email {email}, first: {first}, services: {services:?}");
 
         let mut collector = ConfigCollector::new(services);
@@ -175,7 +175,7 @@ impl SearchClientStd {
         let mut configs = collector.finish();
         self.probe(&mut configs);
 
-        debug!("end of config search");
+        debug!("end of config compose");
         trace!("{configs:?}");
         Ok(configs)
     }
@@ -405,7 +405,7 @@ where
                 match pool.get(&url).and_then(|s| Ok(s.read(&mut buf)?)) {
                     Ok(n) => arg = Some(&buf[..n]),
                     Err(err) => {
-                        debug!("search read failed, signal EOF");
+                        debug!("compose read failed, signal EOF");
                         trace!("{url}: {err:?}");
                         arg = Some(&[]);
                     }
@@ -415,7 +415,7 @@ where
                 match pool.get(&url).and_then(|s| Ok(s.write_all(&bytes)?)) {
                     Ok(()) => {}
                     Err(err) => {
-                        debug!("search write failed, signal EOF");
+                        debug!("compose write failed, signal EOF");
                         trace!("{url}: {err:?}");
                         arg = Some(&[]);
                     }

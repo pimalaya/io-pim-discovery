@@ -11,7 +11,7 @@ use alloc::{format, string::ToString, vec::Vec};
 
 use serde::{Deserialize, Serialize};
 
-use crate::search::types::{AuthMethod, ConfigSource, Endpoint, Security, Service, ServiceConfig};
+use crate::compose::types::{AuthMethod, ConfigSource, Endpoint, Security, Service, ServiceConfig};
 
 /// A provider covered by a fixed rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

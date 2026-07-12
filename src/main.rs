@@ -4,14 +4,13 @@ use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 #[cfg(feature = "autoconfig")]
 use io_pim_discovery::autoconfig::cli::AutoconfigCommand;
+use io_pim_discovery::compose::cli::ComposeCommand;
 #[cfg(feature = "pacc")]
 use io_pim_discovery::pacc::cli::PaccCommand;
 #[cfg(feature = "rfc6186")]
 use io_pim_discovery::rfc6186::cli::SrvCommand;
 #[cfg(feature = "rfc6764")]
 use io_pim_discovery::rfc6764::cli::WebdavCommand;
-#[cfg(feature = "search")]
-use io_pim_discovery::search::cli::SearchCommand;
 use pimalaya_cli::{
     clap::{
         args::{JsonFlag, LogFlags},
@@ -57,8 +56,7 @@ enum Command {
     Autoconfig(AutoconfigCommand),
     #[cfg(feature = "pacc")]
     Pacc(PaccCommand),
-    #[cfg(feature = "search")]
-    Search(SearchCommand),
+    Compose(ComposeCommand),
     #[cfg(feature = "rfc6186")]
     Srv(SrvCommand),
     #[cfg(feature = "rfc6764")]
@@ -75,8 +73,7 @@ impl Command {
             Self::Autoconfig(cmd) => cmd.execute(printer, tls),
             #[cfg(feature = "pacc")]
             Self::Pacc(cmd) => cmd.execute(printer, tls),
-            #[cfg(feature = "search")]
-            Self::Search(cmd) => cmd.execute(printer, tls),
+            Self::Compose(cmd) => cmd.execute(printer, tls),
             #[cfg(feature = "rfc6186")]
             Self::Srv(cmd) => cmd.execute(printer),
             #[cfg(feature = "rfc6764")]

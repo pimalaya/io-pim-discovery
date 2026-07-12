@@ -10,6 +10,8 @@ extern crate std;
 
 #[cfg(feature = "autoconfig")]
 pub mod autoconfig;
+#[cfg(feature = "cli")]
+pub mod compose;
 #[cfg(any(
     feature = "autoconfig",
     feature = "pacc",
@@ -26,10 +28,8 @@ pub mod rfc6186;
 pub mod rfc6764;
 #[cfg(feature = "rfc8620")]
 pub mod rfc8620;
-#[cfg(any(feature = "rfc8620", feature = "search"))]
+#[cfg(feature = "rfc8620")]
 pub mod rfc9110;
-#[cfg(feature = "search")]
-pub mod search;
 #[cfg(any(
     feature = "autoconfig",
     feature = "pacc",

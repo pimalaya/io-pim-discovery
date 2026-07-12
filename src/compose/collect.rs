@@ -1,6 +1,6 @@
 //! # Config collector
 //!
-//! [`ConfigCollector`] is the pure half of a config search: consumers
+//! [`ConfigCollector`] is the pure half of a config compose: consumers
 //! run the discovery bricks however they want (sequentially, or in
 //! parallel on their own transports) and feed each mechanism's
 //! configs in mechanism-priority order; the collector filters them
@@ -10,7 +10,7 @@
 
 use alloc::{collections::BTreeSet, vec::Vec};
 
-use crate::search::types::{Service, ServiceConfig};
+use crate::compose::types::{Service, ServiceConfig};
 
 /// Pure accumulator reducing per-mechanism config lists into one
 /// deduplicated list.

@@ -1,6 +1,6 @@
-//! # Unified search types
+//! # Unified compose types
 //!
-//! The search module reduces every discovery mechanism to one common
+//! The compose module reduces every discovery mechanism to one common
 //! output: a list of [`ServiceConfig`], each describing one way to
 //! reach one service (endpoint, login, authentication methods),
 //! tagged with the mechanism that produced it. Conversion helpers on
@@ -17,9 +17,9 @@ use url::Url;
 
 use crate::{
     autoconfig::types::{AuthenticationType, Autoconfig, SecurityType, ServerType},
+    compose::providers::Provider,
     pacc::types::PaccConfig,
     rfc6186::types::{SrvReport, SrvService},
-    search::providers::Provider,
 };
 
 /// One discovered way to use one service: where to connect, how to
@@ -405,7 +405,7 @@ impl Endpoint {
 mod tests {
     use alloc::{string::ToString, vec};
 
-    use crate::search::types::{AuthMethod, ConfigSource, Endpoint, Service, ServiceConfig};
+    use crate::compose::types::{AuthMethod, ConfigSource, Endpoint, Service, ServiceConfig};
 
     #[test]
     fn probed_schemes_beat_account_level_claims() {

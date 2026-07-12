@@ -1,4 +1,4 @@
-//! Unified email address to service configs search.
+//! Composes service configs from a single email address.
 //!
 //! The module exposes bricks, not a fixed pipeline: the per-mechanism
 //! discovery coroutines live in their own modules (autoconfig, pacc,

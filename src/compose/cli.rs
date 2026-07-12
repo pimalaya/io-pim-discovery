@@ -14,15 +14,15 @@ use pimalaya_cli::{
 use pimalaya_stream::tls::Tls;
 
 use crate::{
-    search::{
-        client::SearchClientStd,
+    compose::{
+        client::ComposeClientStd,
         providers::Provider,
         types::{AuthMethod, ConfigSource, Endpoint, Security, Service, ServiceConfig},
     },
     shared::dns::{DNS_SERVER, resolver_url},
 };
 
-/// Search service configs for an email address.
+/// Compose service configs for an email address.
 ///
 /// Chains fixed provider rules (domain match, then MX-based
 /// detection), PACC, Mozilla autoconfig (ISP main, ISP fallback,
@@ -30,13 +30,13 @@ use crate::{
 /// CalDAV/CardDAV resolve, and reduces everything to one list of
 /// service configs with their authentication methods.
 #[derive(Debug, Args)]
-pub struct SearchCommand {
-    /// Email address to search configs for.
+pub struct ComposeCommand {
+    /// Email address to compose configs for.
     pub email: String,
     /// Stop at the first mechanism yielding at least one config.
     #[arg(long)]
     pub first: bool,
-    /// Restrict the search to the given services.
+    /// Restrict composition to the given services.
     #[arg(long = "service", value_enum, value_name = "SERVICE")]
     pub services: Vec<ServiceArg>,
     /// DNS resolver: `host:port`, or an RFC 8484 resolver URL such
@@ -45,19 +45,19 @@ pub struct SearchCommand {
     pub server: String,
 }
 
-impl SearchCommand {
+impl ComposeCommand {
     pub fn execute(self, printer: &mut impl Printer, tls: &Tls) -> Result<()> {
         let resolver = resolver_url(&self.server)?;
-        let client = SearchClientStd::new(resolver, tls.clone());
+        let client = ComposeClientStd::new(resolver, tls.clone());
         let services: BTreeSet<Service> = self.services.into_iter().map(Into::into).collect();
 
         let configs = if self.first {
-            client.search_first(&self.email, services)?
+            client.compose_first(&self.email, services)?
         } else {
-            client.search_all(&self.email, services)?
+            client.compose_all(&self.email, services)?
         };
 
-        printer.out(SearchOutput(configs))
+        printer.out(ComposeOutput(configs))
     }
 }
 
@@ -91,9 +91,9 @@ impl From<ServiceArg> for Service {
 
 #[derive(serde::Serialize)]
 #[serde(transparent)]
-struct SearchOutput(Vec<ServiceConfig>);
+struct ComposeOutput(Vec<ServiceConfig>);
 
-impl fmt::Display for SearchOutput {
+impl fmt::Display for ComposeOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut table = Table::new();
         table

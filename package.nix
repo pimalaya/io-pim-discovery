@@ -26,12 +26,12 @@ in
 rustPlatform.buildRustPackage {
   inherit cargoHash version buildNoDefaultFeatures;
 
-  pname = "pimconf";
+  pname = "io-pim-discovery";
 
   src = fetchFromGitHub {
     inherit hash;
     owner = "pimalaya";
-    repo = "pimconf";
+    repo = "io-pim-discovery";
     rev = "v${version}";
   };
 
@@ -62,23 +62,23 @@ rustPlatform.buildRustPackage {
     ''
     + ''
       mkdir -p $out/share/{completions,man}
-      ${emulator} "$out"/bin/pimconf${exe} manuals "$out"/share/man
-      ${emulator} "$out"/bin/pimconf${exe} completions -d "$out"/share/completions bash elvish fish powershell zsh
+      ${emulator} "$out"/bin/pim-discovery${exe} manuals "$out"/share/man
+      ${emulator} "$out"/bin/pim-discovery${exe} completions -d "$out"/share/completions bash elvish fish powershell zsh
     ''
     + lib.optionalString installManPages ''
       installManPage "$out"/share/man/*
     ''
     + lib.optionalString installShellCompletions ''
-      installShellCompletion --bash "$out"/share/completions/pimconf.bash
-      installShellCompletion --fish "$out"/share/completions/pimconf.fish
-      installShellCompletion --zsh "$out"/share/completions/_pimconf
+      installShellCompletion --bash "$out"/share/completions/pim-discovery.bash
+      installShellCompletion --fish "$out"/share/completions/pim-discovery.fish
+      installShellCompletion --zsh "$out"/share/completions/_pim-discovery
     '';
 
   meta = {
     description = "CLI and lib to discover PIM-related services, written in Rust";
-    mainProgram = "pimconf";
-    homepage = "https://github.com/pimalaya/pimconf";
-    changelog = "https://github.com/pimalaya/pimconf/blob/master/CHANGELOG.md";
+    mainProgram = "pim-discovery";
+    homepage = "https://github.com/pimalaya/io-pim-discovery";
+    changelog = "https://github.com/pimalaya/io-pim-discovery/blob/master/CHANGELOG.md";
     license = with lib.licenses; [
       mit
       asl20

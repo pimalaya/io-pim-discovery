@@ -62,7 +62,7 @@ impl AutoconfigCommand {
         let (Some(local_part), Some(domain)) = (self.local_part, self.domain) else {
             bail!(
                 "Autoconfig default mode requires both <LOCAL_PART> and <DOMAIN>; \
-                 see `pimconf autoconfig --help` or pick a subcommand"
+                 see `pim-discovery autoconfig --help` or pick a subcommand"
             );
         };
 

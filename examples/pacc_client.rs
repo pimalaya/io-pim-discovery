@@ -10,7 +10,7 @@
 
 use std::env;
 
-use pimconf::pacc::client::DiscoveryPaccClientStd;
+use io_pim_discovery::pacc::client::DiscoveryPaccClientStd;
 use url::Url;
 
 fn main() {

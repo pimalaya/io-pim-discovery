@@ -9,10 +9,10 @@
 //! parses the bytes as XML, PACC parses them as JSON and also keeps
 //! the raw bytes for digest verification.
 //!
-//! [`HttpGet`] sits at the io-http / pimconf boundary: it wraps
+//! [`HttpGet`] sits at the io-http / io-pim-discovery boundary: it wraps
 //! io-http's [`Http11Send`] and translates its
 //! [`HttpCoroutineState`](io_http::coroutine::HttpCoroutineState)
-//! into the pimconf shape, tagging every yielded I/O step with
+//! into the io-pim-discovery shape, tagging every yielded I/O step with
 //! the request [`Url`] so the std client can route through
 //! [`crate::shared::pool::StreamPool`].
 

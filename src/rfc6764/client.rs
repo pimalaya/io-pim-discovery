@@ -161,7 +161,7 @@ impl DiscoveryWebdavClientStd {
         self.run(coroutine)
     }
 
-    /// Pumps any pimconf coroutine (`Yield = DiscoveryYield`) through
+    /// Pumps any io-pim-discovery coroutine (`Yield = DiscoveryYield`) through
     /// the stream pool until completion.
     fn run<C, T, E>(&mut self, mut coroutine: C) -> Result<T, DiscoveryWebdavClientStdError>
     where

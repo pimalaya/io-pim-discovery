@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renamed the crate from `pimconf` to `io-pim-discovery`, following the naming rule that I/O-free libraries are prefixed with `io-`, and with `io-pim-` when they are a lowest common denominator across PIM protocols (discovery is global to PIM). The library path is now `io_pim_discovery`.
+- Named the CLI binary `pim-discovery` (the `io-` prefix marks the I/O-free library, not the command). The crate, repository and library keep the `io-pim-discovery` name.
+- Gated the CLI behind a non-default `cli` cargo feature: the CLI is a convenience utility rather than a cross-library tool, so it is opt-in and no longer part of the default feature set.
 - Replaced the serial `SearchAll`/`SearchFirst` coroutines with bricks plus orchestration: the search module now exposes the pure `ConfigCollector` (per-mechanism outputs fed in priority order, filtered against the requested services and merged) and `ServiceConfig::probe_urls` (the endpoints whose unauthenticated 401 may advertise the config's schemes), while the per-mechanism discovery coroutines stay where they were; consumers orchestrate the bricks however they want, typically in parallel on their own transports. `SearchClientStd` became that reference orchestrator: one thread per mechanism (each on its own stream pool) and one probe thread per config, constructed with `new(dns, tls)` (the `with_tls`/`with_factory` builders are gone, and the module moved behind the `stream` feature). `search_first` keeps its output shape but no longer stops early: every mechanism runs in parallel and only the highest-priority one that produced configs is kept.
 
 ### Added
@@ -29,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added the `search` feature: a unified email address to service configs search.
 
-  The new search module chains fixed provider rules (Google and Microsoft, matched by email domain then by MX records for Google Workspace and Microsoft 365 custom domains), PACC, the Mozilla autoconfig locations (ISP main, ISP fallback, the mailconf TXT redirect, ISPDB), RFC 6186 SRV records and the RFC 6764 CalDAV/CardDAV resolve, and reduces everything to one list of `ServiceConfig` (service, endpoint, username, authentication methods: password, OAuth 2.0 authorization code grant, OAuth 2.0 device authorization grant, or an OAuth 2.0 issuer to resolve via RFC 8414 metadata). The `SearchAll` coroutine collects configs from every mechanism; `SearchFirst` completes at the first mechanism yielding one. `SearchClientStd` exposes both over a stream pool, treating per-endpoint I/O failures as EOF so a broken mechanism is skipped instead of failing the search; the `pimconf search <EMAIL> [--first] [--service <SERVICE>]` command exposes them on the CLI.
+  The new search module chains fixed provider rules (Google and Microsoft, matched by email domain then by MX records for Google Workspace and Microsoft 365 custom domains), PACC, the Mozilla autoconfig locations (ISP main, ISP fallback, the mailconf TXT redirect, ISPDB), RFC 6186 SRV records and the RFC 6764 CalDAV/CardDAV resolve, and reduces everything to one list of `ServiceConfig` (service, endpoint, username, authentication methods: password, OAuth 2.0 authorization code grant, OAuth 2.0 device authorization grant, or an OAuth 2.0 issuer to resolve via RFC 8414 metadata). The `SearchAll` coroutine collects configs from every mechanism; `SearchFirst` completes at the first mechanism yielding one. `SearchClientStd` exposes both over a stream pool, treating per-endpoint I/O failures as EOF so a broken mechanism is skipped instead of failing the search; the `io-pim-discovery search <EMAIL> [--first] [--service <SERVICE>]` command exposes them on the CLI.
 
 ### Changed
 
@@ -69,5 +72,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added CLI (requires `cli` feature).
 
-[unreleased]: https://github.com/pimalaya/pimconf/compare/v0.1.0..HEAD
-[0.1.0]: https://github.com/pimalaya/pimconf/compare/root..v0.1.0
+[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.1.0..HEAD
+[0.1.0]: https://github.com/pimalaya/io-pim-discovery/compare/root..v0.1.0

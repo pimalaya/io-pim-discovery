@@ -9,16 +9,16 @@ die() {
 
 DESTDIR="${DESTDIR:-}"
 PREFIX="${PREFIX:-"$DESTDIR/usr/local"}"
-RELEASES_URL="https://github.com/pimalaya/pimconf/releases"
+RELEASES_URL="https://github.com/pimalaya/io-pim-discovery/releases"
 
-binary=discover
+binary=pim-discovery
 system=$(uname -s | tr [:upper:] [:lower:])
 machine=$(uname -m | tr [:upper:] [:lower:])
 
 case $system in
     msys*|mingw*|cygwin*|win*)
 	target=x86_64-windows
-	binary=discover.exe;;
+	binary=pim-discovery.exe;;
 
     linux|freebsd)
 	case $machine in
@@ -45,11 +45,11 @@ tmpdir=$(mktemp -d) || die "Cannot create temporary directory"
 trap "rm -rf $tmpdir" EXIT
 
 echo "Downloading latest $system release…"
-curl -sLo "$tmpdir/discover.tgz" \
-     "$RELEASES_URL/latest/download/discover.$target.tgz"
+curl -sLo "$tmpdir/pim-discovery.tgz" \
+     "$RELEASES_URL/latest/download/pim-discovery.$target.tgz"
 
 echo "Installing binary…"
-tar -xzf "$tmpdir/discover.tgz" -C "$tmpdir"
+tar -xzf "$tmpdir/pim-discovery.tgz" -C "$tmpdir"
 
 mkdir -p "$PREFIX/bin"
 cp -f -- "$tmpdir/$binary" "$PREFIX/bin/$binary"

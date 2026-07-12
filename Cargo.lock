@@ -700,6 +700,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-pim-discovery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "domain",
+ "env_logger",
+ "io-http",
+ "ipconfig",
+ "log",
+ "pimalaya-cli",
+ "pimalaya-stream",
+ "resolv-conf",
+ "serde",
+ "serde-xml-rs",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "url",
+]
+
+[[package]]
 name = "ipconfig"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1055,30 +1079,6 @@ dependencies = [
  "secrecy",
  "serde",
  "uds_windows",
- "url",
-]
-
-[[package]]
-name = "pimconf"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "clap",
- "domain",
- "env_logger",
- "io-http",
- "ipconfig",
- "log",
- "pimalaya-cli",
- "pimalaya-stream",
- "resolv-conf",
- "serde",
- "serde-xml-rs",
- "serde_json",
- "sha2",
- "subtle",
- "thiserror",
  "url",
 ]
 

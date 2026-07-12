@@ -1,4 +1,4 @@
-# 🪄 Pimconf [![Documentation](https://img.shields.io/docsrs/pimconf?style=flat&logo=docs.rs&logoColor=white)](https://docs.rs/pimconf/latest/pimconf) [![Matrix](https://img.shields.io/badge/chat-%23pimalaya-blue?style=flat&logo=matrix&logoColor=white)](https://matrix.to/#/#pimalaya:matrix.org) [![Mastodon](https://img.shields.io/badge/news-%40pimalaya-blue?style=flat&logo=mastodon&logoColor=white)](https://fosstodon.org/@pimalaya)
+# 🪄 io-pim-discovery [![Documentation](https://img.shields.io/docsrs/io-pim-discovery?style=flat&logo=docs.rs&logoColor=white)](https://docs.rs/io-pim-discovery/latest/io_pim_discovery) [![Matrix](https://img.shields.io/badge/chat-%23pimalaya-blue?style=flat&logo=matrix&logoColor=white)](https://matrix.to/#/#pimalaya:matrix.org) [![Mastodon](https://img.shields.io/badge/news-%40pimalaya-blue?style=flat&logo=mastodon&logoColor=white)](https://fosstodon.org/@pimalaya)
 
 CLI and lib to discover PIM-related services, written in Rust.
 
@@ -56,13 +56,13 @@ This repository ships three things:
 - **JSON** output via `--json`
 
 > [!TIP]
-> pimconf is written in [Rust](https://www.rust-lang.org/) and uses [cargo features](https://doc.rust-lang.org/cargo/reference/features.html) to gate functionality. The default feature set is declared in [Cargo.toml](./Cargo.toml).
+> io-pim-discovery is written in [Rust](https://www.rust-lang.org/) and uses [cargo features](https://doc.rust-lang.org/cargo/reference/features.html) to gate functionality. The default feature set is declared in [Cargo.toml](./Cargo.toml).
 
 ## Installation
 
 ### Pre-built binary
 
-The CLI binary `pimconf` has not been officially released yet. Check the [releases](https://github.com/pimalaya/pimconf/actions/workflows/releases.yml) GitHub workflow and look for the *Artifacts* section. These pre-built binaries are built from the `master` branch.
+The CLI binary `pim-discovery` has not been officially released yet. Check the [releases](https://github.com/pimalaya/io-pim-discovery/actions/workflows/releases.yml) GitHub workflow and look for the *Artifacts* section. These pre-built binaries are built from the `master` branch.
 
 > [!NOTE]
 > Pre-built binaries are built with the default cargo features, plus `cli`. If you need more features, please use another installation method.
@@ -70,20 +70,20 @@ The CLI binary `pimconf` has not been officially released yet. Check the [releas
 ### Cargo
 
 ```sh
-cargo install pimconf --locked
+cargo install io-pim-discovery --locked --features cli
 ```
 
 You can also use the git repository for a more up-to-date (but less stable) version:
 
 ```sh
-cargo install --locked --git https://github.com/pimalaya/pimconf.git
+cargo install --locked --features cli --git https://github.com/pimalaya/io-pim-discovery.git
 ```
 
-To use pimconf as a library, add it to your Cargo.toml:
+To use io-pim-discovery as a library, add it to your Cargo.toml:
 
 ```toml
 [dependencies]
-pimconf = { version = "0.1", default-features = false, features = ["autoconfig", "pacc", "rfc6186", "rfc6764", "client"] }
+io-pim-discovery = { version = "0.1", default-features = false, features = ["autoconfig", "pacc", "rfc6186", "rfc6764", "client"] }
 ```
 
 The `client` feature pulls in the `std`-blocking helpers. Drop it (and pick any combination of `autoconfig` / `pacc` / `rfc6186` / `rfc6764` / `rfc8620`) for a `no_std`-friendly, pure-coroutine build.
@@ -93,20 +93,20 @@ The `client` feature pulls in the `std`-blocking helpers. Drop it (and pick any 
 If you have the [Flakes](https://nixos.wiki/wiki/Flakes) feature enabled:
 
 ```sh
-nix profile install github:pimalaya/pimconf
+nix profile install github:pimalaya/io-pim-discovery
 ```
 
 Or run without installing:
 
 ```sh
-nix run github:pimalaya/pimconf -- autoconfig <local-part> <domain>
+nix run github:pimalaya/io-pim-discovery -- autoconfig <local-part> <domain>
 ```
 
 ### Sources
 
 ```sh
-git clone https://github.com/pimalaya/pimconf
-cd pimconf
+git clone https://github.com/pimalaya/io-pim-discovery
+cd io-pim-discovery
 nix run
 ```
 
@@ -118,7 +118,7 @@ Using a low-level DNS MX I/O-free coroutine:
 
 ```rust,ignore
 use std::{io::{Read, Write}, net::TcpStream};
-use pimconf::{
+use io_pim_discovery::{
     autoconfig::mx::DiscoveryDnsMx,
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
 };
@@ -152,7 +152,7 @@ for record in records {
 Using a mid-level std PACC client:
 
 ```rust,ignore
-use pimconf::pacc::client::DiscoveryPaccClientStd;
+use io_pim_discovery::pacc::client::DiscoveryPaccClientStd;
 use pimalaya_stream::tls::Tls;
 use url::Url;
 
@@ -168,7 +168,7 @@ println!("{config:#?}");
 Run the full Thunderbird Autoconfiguration chain on `<local_part> <domain>`:
 
 ```sh
-pimconf autoconfig user fastmail.com
+pim-discovery autoconfig user fastmail.com
 ```
 
 The chain tries, in order: every ISP main URL (secure then plain), every `/.well-known/` URL (secure then plain), the Thunderbird ISPDB, then re-tries the same against the MX target's parent domain, then logs the `mailconf=<URL>` TXT redirect if one is published.
@@ -176,50 +176,50 @@ The chain tries, in order: every ISP main URL (secure then plain), every `/.well
 Run a single primitive instead:
 
 ```sh
-pimconf autoconfig user fastmail.com isp --secure
-pimconf autoconfig user fastmail.com isp-fallback --secure
-pimconf autoconfig user fastmail.com ispdb --secure
-pimconf autoconfig user fastmail.com mx
-pimconf autoconfig user fastmail.com mailconf
+pim-discovery autoconfig user fastmail.com isp --secure
+pim-discovery autoconfig user fastmail.com isp-fallback --secure
+pim-discovery autoconfig user fastmail.com ispdb --secure
+pim-discovery autoconfig user fastmail.com mx
+pim-discovery autoconfig user fastmail.com mailconf
 ```
 
 Search every mechanism for service configs from a single email address (add `--first` to stop at the first mechanism yielding configs, `--service` to restrict the searched services):
 
 ```sh
-pimconf search user@fastmail.com
-pimconf search user@fastmail.com --first --service carddav
+pim-discovery search user@fastmail.com
+pim-discovery search user@fastmail.com --first --service carddav
 ```
 
 Run RFC 6186 SRV discovery (top-level subcommand):
 
 ```sh
-pimconf srv fastmail.com
+pim-discovery srv fastmail.com
 ```
 
 Run RFC 6764 DNS SRV discovery for CalDAV/CardDAV:
 
 ```sh
-pimconf webdav fastmail.com
+pim-discovery webdav fastmail.com
 ```
 
 Run PACC discovery:
 
 ```sh
-pimconf pacc fastmail.com
+pim-discovery pacc fastmail.com
 ```
 
 JSON output:
 
 ```sh
-pimconf --json autoconfig user fastmail.com
+pim-discovery --json autoconfig user fastmail.com
 ```
 
 Pick a specific TLS stack and crypto provider:
 
 ```sh
-pimconf --tls rustls --rustls-crypto ring autoconfig user fastmail.com
-pimconf --tls native-tls pacc fastmail.com
-pimconf --tls-cert /path/to/extra-root.pem autoconfig user fastmail.com
+pim-discovery --tls rustls --rustls-crypto ring autoconfig user fastmail.com
+pim-discovery --tls native-tls pacc fastmail.com
+pim-discovery --tls-cert /path/to/extra-root.pem autoconfig user fastmail.com
 ```
 
 ## FAQ
@@ -230,7 +230,7 @@ pimconf --tls-cert /path/to/extra-root.pem autoconfig user fastmail.com
   Use `--log <level>` where `<level>` is one of `off`, `error`, `warn`, `info`, `debug`, `trace`:
 
   ```sh
-  pimconf --log trace autoconfig user fastmail.com
+  io-pim-discovery --log trace autoconfig user fastmail.com
   ```
 
   The `RUST_LOG` environment variable, when set, overrides `--log` and supports per-target filters (see the [env_logger](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) documentation). `RUST_BACKTRACE=1` enables full error backtraces.
@@ -238,7 +238,7 @@ pimconf --tls-cert /path/to/extra-root.pem autoconfig user fastmail.com
   Logs are written to `stderr`, so they can be redirected easily to a file:
 
   ```sh
-  pimconf --log trace autoconfig user fastmail.com 2>/tmp/pimconf.log
+  io-pim-discovery --log trace autoconfig user fastmail.com 2>/tmp/pim-discovery.log
   ```
 </details>
 

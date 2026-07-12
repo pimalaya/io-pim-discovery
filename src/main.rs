@@ -2,6 +2,16 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+#[cfg(feature = "autoconfig")]
+use io_pim_discovery::autoconfig::cli::AutoconfigCommand;
+#[cfg(feature = "pacc")]
+use io_pim_discovery::pacc::cli::PaccCommand;
+#[cfg(feature = "rfc6186")]
+use io_pim_discovery::rfc6186::cli::SrvCommand;
+#[cfg(feature = "rfc6764")]
+use io_pim_discovery::rfc6764::cli::WebdavCommand;
+#[cfg(feature = "search")]
+use io_pim_discovery::search::cli::SearchCommand;
 use pimalaya_cli::{
     clap::{
         args::{JsonFlag, LogFlags},
@@ -13,16 +23,6 @@ use pimalaya_cli::{
     printer::{Printer, StdoutPrinter},
 };
 use pimalaya_stream::tls::{Rustls, RustlsCrypto, Tls, TlsProvider};
-#[cfg(feature = "autoconfig")]
-use pimconf::autoconfig::cli::AutoconfigCommand;
-#[cfg(feature = "pacc")]
-use pimconf::pacc::cli::PaccCommand;
-#[cfg(feature = "rfc6186")]
-use pimconf::rfc6186::cli::SrvCommand;
-#[cfg(feature = "rfc6764")]
-use pimconf::rfc6764::cli::WebdavCommand;
-#[cfg(feature = "search")]
-use pimconf::search::cli::SearchCommand;
 
 fn main() {
     let cli = Cli::parse();
@@ -36,7 +36,7 @@ fn main() {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = env!("CARGO_PKG_NAME"))]
+#[command(name = env!("CARGO_BIN_NAME"))]
 #[command(about = "CLI to discover PIM-related services")]
 #[command(author, version, long_version = long_version!())]
 #[command(propagate_version = true, infer_subcommands = true)]

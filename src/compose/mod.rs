@@ -7,8 +7,9 @@
 //! one deduplicated config list in [`collect`]. Consumers orchestrate
 //! the bricks however they want (typically in parallel, each on its
 //! own transport); [`client`] is the std-blocking reference
-//! orchestrator backing the CLI.
+//! orchestrator backing the CLI (stream feature).
 
+#[cfg(feature = "stream")]
 pub mod client;
 pub mod collect;
 pub mod providers;

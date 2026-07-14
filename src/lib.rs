@@ -12,18 +12,16 @@ extern crate std;
 pub mod autoconfig;
 #[cfg(feature = "cli")]
 pub mod cli;
-// The compose orchestrator needs the std stream substrate AND at least
-// one discovery mechanism to compose; without a mechanism it has
-// nothing to run.
-#[cfg(all(
-    feature = "stream",
-    any(
-        feature = "autoconfig",
-        feature = "pacc",
-        feature = "rfc6186",
-        feature = "rfc6764",
-        feature = "rfc8620"
-    )
+// The compose bricks need at least one discovery mechanism to
+// compose; without a mechanism there is nothing to reduce. The std
+// orchestrator inside (compose::client) is further gated on the
+// stream feature.
+#[cfg(any(
+    feature = "autoconfig",
+    feature = "pacc",
+    feature = "rfc6186",
+    feature = "rfc6764",
+    feature = "rfc8620"
 ))]
 pub mod compose;
 #[cfg(any(

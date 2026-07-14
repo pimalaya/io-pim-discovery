@@ -56,7 +56,7 @@ path = "examples/pacc_client.rs"
 required-features = ["pacc", "client"]
 
 [build-dependencies]
-pimalaya-cli = { version = "0.0.1", default-features = false, features = ["build"], optional = true }
+pimalaya-cli = { version = "0.0.2", default-features = false, features = ["build"], optional = true }
 
 [dev-dependencies]
 env_logger = "0.11"

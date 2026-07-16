@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-16
+
+### Fixed
+
+- Restored all DNS-based discovery (RFC 6186/6764/8620 SRV lookups, MX provider detection and the PACC DNS-TXT digest verification), broken since 0.3.0 by the move to the `domain` 0.12.2 `unstable-new` API. Its `RevNameBuf` parser rejects relative names, but every query name was built without a trailing dot, so each lookup failed with `NameParseError::Relative` and its mechanism was silently skipped. Query names are now made absolute before parsing. This notably restores OAuth issuer discovery for providers that advertise it only through PACC, such as Fastmail.
+
 ## [0.3.1] - 2026-07-16
 
 ### Fixed

@@ -37,7 +37,9 @@ use url::Url;
 
 use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
-    shared::dns::{DNS_QUERY_BUF_SIZE, DiscoveryDnsExchange, DiscoveryDnsExchangeError},
+    shared::dns::{
+        DNS_QUERY_BUF_SIZE, DiscoveryDnsExchange, DiscoveryDnsExchangeError, absolute_name,
+    },
 };
 
 /// Owned DNS SRV answer record returned by [`DiscoveryDnsSrv`].
@@ -107,7 +109,7 @@ impl DiscoveryCoroutine for DiscoveryDnsSrv {
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
         match mem::take(&mut self.state) {
             State::BuildQuery => {
-                let qname = match self.qname.parse::<RevNameBuf>() {
+                let qname = match absolute_name(&self.qname).parse::<RevNameBuf>() {
                     Ok(qname) => qname,
                     Err(err) => {
                         let raw = mem::take(&mut self.qname);

@@ -32,7 +32,9 @@ use url::Url;
 
 use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
-    shared::dns::{DNS_QUERY_BUF_SIZE, DiscoveryDnsExchange, DiscoveryDnsExchangeError},
+    shared::dns::{
+        DNS_QUERY_BUF_SIZE, DiscoveryDnsExchange, DiscoveryDnsExchangeError, absolute_name,
+    },
 };
 
 /// Owned DNS MX answer record returned by [`DiscoveryDnsMx`].
@@ -102,7 +104,7 @@ impl DiscoveryCoroutine for DiscoveryDnsMx {
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
         match mem::take(&mut self.state) {
             State::BuildQuery => {
-                let qname = match self.domain.parse::<RevNameBuf>() {
+                let qname = match absolute_name(&self.domain).parse::<RevNameBuf>() {
                     Ok(qname) => qname,
                     Err(err) => {
                         let domain = mem::take(&mut self.domain);

@@ -72,6 +72,22 @@ pub(crate) fn resolver_url(server: &str) -> Result<Url, url::ParseError> {
 /// for building the outgoing message.
 pub(crate) const DNS_QUERY_BUF_SIZE: usize = 4 * 1024;
 
+/// Makes a DNS query name absolute so the `domain` crate accepts it.
+///
+/// The query builders take bare names (`_imap._tcp.example.com`,
+/// `_ua-auto-config.example.com`), but `RevNameBuf`'s parser rejects
+/// relative names (`NameParseError::Relative`, "did not end with
+/// `.`"), so a root dot is appended when it is missing.
+pub(crate) fn absolute_name(name: &str) -> String {
+    use alloc::format;
+
+    if name.ends_with('.') {
+        name.to_string()
+    } else {
+        format!("{name}.")
+    }
+}
+
 /// Errors that can occur during a single DNS message exchange.
 #[derive(Debug, Error)]
 pub enum DiscoveryDnsExchangeError {
@@ -292,7 +308,7 @@ impl DiscoveryCoroutine for DiscoveryDnsTxt {
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
         match mem::take(&mut self.state) {
             State::BuildQuery => {
-                let qname = match self.domain.parse::<RevNameBuf>() {
+                let qname = match absolute_name(&self.domain).parse::<RevNameBuf>() {
                     Ok(qname) => qname,
                     Err(err) => {
                         let domain = mem::take(&mut self.domain);

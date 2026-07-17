@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-17
+
 ### Fixed
 
 - Corrected the Microsoft IMAP/POP/SMTP OAuth scopes to use the `https://outlook.office.com/` resource instead of `https://outlook.office365.com/`. The latter is the server host, not a valid scope resource, so Microsoft's authorize endpoint rejected it with `invalid_scope` ("The provided resource value for the input parameter 'scope' is not valid"). The server hosts (`outlook.office365.com`, `smtp.office365.com`) are unchanged.
@@ -92,7 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added CLI (requires `cli` feature).
 
-[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.1..HEAD
+[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.3..HEAD
+[0.3.3]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.2..v0.3.3
+[0.3.2]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.1..v0.3.2
 [0.3.1]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.0..v0.3.1
 [0.3.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.2.0..v0.3.0
 [0.2.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.1.0..v0.2.0

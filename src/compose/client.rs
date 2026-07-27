@@ -13,7 +13,11 @@
 //! address fails the whole compose. Mechanisms irrelevant to the
 //! requested services are never started.
 
-use std::thread;
+use std::{
+    sync::{Arc, mpsc},
+    thread,
+    time::{Duration, Instant},
+};
 
 #[cfg(feature = "rfc8414")]
 use alloc::collections::BTreeMap;
@@ -74,6 +78,36 @@ pub struct DiscoveryComposeClientStd {
     tls: Tls,
 }
 
+/// A single discovery mechanism the fan-out can run, dispatched by
+/// [`DiscoveryComposeClientStd::run_mechanism`]. Kept in one place so
+/// the bounded and unbounded fan-outs share the exact same priority
+/// order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mechanism {
+    Mx,
+    Pacc,
+    IspMain,
+    IspFallback,
+    Mailconf,
+    Ispdb,
+    Srv,
+    #[cfg(feature = "rfc6764")]
+    Caldav,
+    #[cfg(feature = "rfc6764")]
+    Carddav,
+    Jmap,
+}
+
+/// The outcome of [`DiscoveryComposeClientStd::plan`]: the pure
+/// fixed-provider output (always reduced first, `None` when no rule
+/// matched) plus the parsed inputs and the ordered mechanisms to run.
+struct Plan {
+    provider_output: Option<Vec<DiscoveryServiceConfig>>,
+    local: String,
+    domain: String,
+    mechanisms: Vec<Mechanism>,
+}
+
 impl DiscoveryComposeClientStd {
     /// Builds a client that resolves DNS lookups through `dns` (a
     /// `tcp://host:port` URL pointing at a DNS-over-TCP resolver) and
@@ -90,7 +124,24 @@ impl DiscoveryComposeClientStd {
         email: &str,
         services: BTreeSet<DiscoveryService>,
     ) -> Result<Vec<DiscoveryServiceConfig>, DiscoveryComposeClientStdError> {
-        self.compose(email, services, false)
+        self.compose(email, services, false, None)
+    }
+
+    /// Same as [`compose_all`](Self::compose_all), but bounds the
+    /// parallel mechanism discovery to `deadline`: mechanisms that have
+    /// not produced their configs by then are abandoned (they finish in
+    /// the background and their output is dropped), and only what
+    /// completed in time is reduced and returned. Meant for interactive
+    /// callers (a setup wizard) where a single unreachable endpoint must
+    /// not stall the whole discovery. An empty result means nothing
+    /// completed in time.
+    pub fn compose_all_within(
+        &self,
+        email: &str,
+        services: BTreeSet<DiscoveryService>,
+        deadline: Duration,
+    ) -> Result<Vec<DiscoveryServiceConfig>, DiscoveryComposeClientStdError> {
+        self.compose(email, services, false, Some(deadline))
     }
 
     /// Same mechanism set as [`compose_all`](Self::compose_all), but
@@ -103,7 +154,7 @@ impl DiscoveryComposeClientStd {
         email: &str,
         services: BTreeSet<DiscoveryService>,
     ) -> Result<Vec<DiscoveryServiceConfig>, DiscoveryComposeClientStdError> {
-        self.compose(email, services, true)
+        self.compose(email, services, true, None)
     }
 
     /// Runs every mechanism in parallel and returns their raw,
@@ -246,11 +297,15 @@ impl DiscoveryComposeClientStd {
         email: &str,
         services: BTreeSet<DiscoveryService>,
         first: bool,
+        deadline: Option<Duration>,
     ) -> Result<Vec<DiscoveryServiceConfig>, DiscoveryComposeClientStdError> {
         debug!("begin config compose");
-        trace!("email {email}, first: {first}, services: {services:?}");
+        trace!("email {email}, first: {first}, services: {services:?}, deadline: {deadline:?}");
 
-        let outputs = self.parallel_outputs(email, &services)?;
+        let outputs = match deadline {
+            Some(deadline) => self.parallel_outputs_within(email, &services, deadline)?,
+            None => self.parallel_outputs(email, &services)?,
+        };
         let mut collector = DiscoveryConfigCollector::new(services);
 
         for configs in outputs {
@@ -279,6 +334,90 @@ impl DiscoveryComposeClientStd {
         email: &str,
         services: &BTreeSet<DiscoveryService>,
     ) -> Result<Vec<Vec<DiscoveryServiceConfig>>, DiscoveryComposeClientStdError> {
+        let Plan {
+            provider_output,
+            local,
+            domain,
+            mechanisms,
+        } = self.plan(email, services)?;
+
+        // Mechanism outputs, in priority order. The fixed provider
+        // domain rule is pure and comes first (see `plan`).
+        let mut outputs: Vec<Vec<DiscoveryServiceConfig>> = Vec::new();
+        outputs.extend(provider_output);
+
+        outputs.extend(thread::scope(|scope| {
+            let (local, domain, email) = (local.as_str(), domain.as_str(), email.trim());
+            let handles: Vec<_> = mechanisms
+                .iter()
+                .map(|&mechanism| {
+                    scope.spawn(move || self.run_mechanism(mechanism, local, domain, email))
+                })
+                .collect();
+
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap_or_default())
+                .collect::<Vec<_>>()
+        }));
+
+        Ok(outputs)
+    }
+
+    /// Same as [`parallel_outputs`](Self::parallel_outputs) but bounds
+    /// the mechanism fan-out to `deadline`. Each mechanism runs on its
+    /// own detached thread; those that have not reported by the deadline
+    /// leave an empty slot (their thread finishes in the background and
+    /// its output is dropped), so the returned vec keeps the same
+    /// mechanism-priority order regardless of completion order.
+    fn parallel_outputs_within(
+        &self,
+        email: &str,
+        services: &BTreeSet<DiscoveryService>,
+        deadline: Duration,
+    ) -> Result<Vec<Vec<DiscoveryServiceConfig>>, DiscoveryComposeClientStdError> {
+        let Plan {
+            provider_output,
+            local,
+            domain,
+            mechanisms,
+        } = self.plan(email, services)?;
+
+        let mut outputs: Vec<Vec<DiscoveryServiceConfig>> = Vec::new();
+        outputs.extend(provider_output);
+
+        // NOTE: detached threads (unlike a scope) may outlive this call,
+        // so each captures an owned, refcounted client and owned inputs
+        // rather than borrowing `self`. Stragglers past the deadline run
+        // to completion in the background against their own clone.
+        let client = Arc::new(self.clone_shallow());
+        let email = email.trim().to_string();
+        let tasks: Vec<_> = mechanisms
+            .into_iter()
+            .map(|mechanism| {
+                let client = client.clone();
+                let (local, domain, email) = (local.clone(), domain.clone(), email.clone());
+                move || client.run_mechanism(mechanism, &local, &domain, &email)
+            })
+            .collect();
+
+        for output in collect_within(tasks, deadline) {
+            outputs.push(output.unwrap_or_default());
+        }
+
+        Ok(outputs)
+    }
+
+    /// Parses `email` and works out which mechanisms to run for
+    /// `services`, in priority order, shared by the bounded and
+    /// unbounded fan-outs. The fixed-provider domain rule is pure, so it
+    /// is resolved here and returned as the always-first output; when it
+    /// matches, the MX-based provider detection is pointless and skipped.
+    fn plan(
+        &self,
+        email: &str,
+        services: &BTreeSet<DiscoveryService>,
+    ) -> Result<Plan, DiscoveryComposeClientStdError> {
         let email = email.trim();
 
         let Some((local, domain)) = email.split_once('@') else {
@@ -293,60 +432,85 @@ impl DiscoveryComposeClientStd {
             || wants(DiscoveryService::Pop3)
             || wants(DiscoveryService::Smtp);
 
-        // Mechanism outputs, in priority order. The fixed provider
-        // domain rule is pure and comes first; when it matches, the
-        // MX-based provider detection is pointless and skipped.
-        let mut outputs: Vec<Vec<DiscoveryServiceConfig>> = Vec::new();
-
         let provider = DiscoveryKnownProvider::from_domain(&domain);
-        if let Some(provider) = provider {
+        let provider_output = provider.map(|provider| {
             debug!("email domain matched a fixed provider rule");
             trace!("{domain} -> {provider:?}");
-            outputs.push(provider.configs(email));
+            provider.configs(email)
+        });
+
+        // Mechanisms in priority order, matching the reduction order the
+        // collector relies on.
+        let mut mechanisms = Vec::new();
+        if provider.is_none() {
+            mechanisms.push(Mechanism::Mx);
+        }
+        mechanisms.push(Mechanism::Pacc);
+        if wants_mail {
+            mechanisms.extend([
+                Mechanism::IspMain,
+                Mechanism::IspFallback,
+                Mechanism::Mailconf,
+                Mechanism::Ispdb,
+            ]);
+        }
+        if wants(DiscoveryService::Imap) || wants(DiscoveryService::Smtp) {
+            mechanisms.push(Mechanism::Srv);
+        }
+        #[cfg(feature = "rfc6764")]
+        if wants(DiscoveryService::Caldav) {
+            mechanisms.push(Mechanism::Caldav);
+        }
+        #[cfg(feature = "rfc6764")]
+        if wants(DiscoveryService::Carddav) {
+            mechanisms.push(Mechanism::Carddav);
+        }
+        if wants(DiscoveryService::Jmap) {
+            mechanisms.push(Mechanism::Jmap);
         }
 
-        outputs.extend(thread::scope(|scope| {
-            let domain = &domain;
-            let mut handles = Vec::new();
+        Ok(Plan {
+            provider_output,
+            local: local.to_string(),
+            domain,
+            mechanisms,
+        })
+    }
 
-            if provider.is_none() {
-                handles.push(scope.spawn(|| self.run_mx(domain, email)));
-            }
-
-            handles.push(scope.spawn(|| self.run_pacc(domain)));
-
-            if wants_mail {
-                handles.push(scope.spawn(|| self.run_isp_main(local, domain, email)));
-                handles.push(scope.spawn(|| self.run_isp_fallback(domain, email)));
-                handles.push(scope.spawn(|| self.run_mailconf(domain, email)));
-                handles.push(scope.spawn(|| self.run_ispdb(domain, email)));
-            }
-
-            if wants(DiscoveryService::Imap) || wants(DiscoveryService::Smtp) {
-                handles.push(scope.spawn(|| self.run_srv(domain)));
-            }
-
+    /// Dispatches one [`Mechanism`] to its runner. The runners are pure
+    /// with respect to `self` (they read only the DNS resolver and TLS
+    /// config), so this is safe to call from both scoped and detached
+    /// threads.
+    fn run_mechanism(
+        &self,
+        mechanism: Mechanism,
+        local: &str,
+        domain: &str,
+        email: &str,
+    ) -> Vec<DiscoveryServiceConfig> {
+        match mechanism {
+            Mechanism::Mx => self.run_mx(domain, email),
+            Mechanism::Pacc => self.run_pacc(domain),
+            Mechanism::IspMain => self.run_isp_main(local, domain, email),
+            Mechanism::IspFallback => self.run_isp_fallback(domain, email),
+            Mechanism::Mailconf => self.run_mailconf(domain, email),
+            Mechanism::Ispdb => self.run_ispdb(domain, email),
+            Mechanism::Srv => self.run_srv(domain),
             #[cfg(feature = "rfc6764")]
-            if wants(DiscoveryService::Caldav) {
-                handles.push(scope.spawn(|| self.run_dav(domain, DiscoveryDavService::Caldav)));
-            }
-
+            Mechanism::Caldav => self.run_dav(domain, DiscoveryDavService::Caldav),
             #[cfg(feature = "rfc6764")]
-            if wants(DiscoveryService::Carddav) {
-                handles.push(scope.spawn(|| self.run_dav(domain, DiscoveryDavService::Carddav)));
-            }
+            Mechanism::Carddav => self.run_dav(domain, DiscoveryDavService::Carddav),
+            Mechanism::Jmap => self.run_jmap(domain),
+        }
+    }
 
-            if wants(DiscoveryService::Jmap) {
-                handles.push(scope.spawn(|| self.run_jmap(domain)));
-            }
-
-            handles
-                .into_iter()
-                .map(|handle| handle.join().unwrap_or_default())
-                .collect::<Vec<_>>()
-        }));
-
-        Ok(outputs)
+    /// Cheap copy carrying only the fields the mechanism runners read,
+    /// so a detached thread can own the client instead of borrowing it.
+    fn clone_shallow(&self) -> Self {
+        Self {
+            dns: self.dns.clone(),
+            tls: self.tls.clone(),
+        }
     }
 
     /// Resolves every `OauthIssuer` auth method in place: fetches the
@@ -799,5 +963,81 @@ where
                 }
             }
         }
+    }
+}
+
+/// Runs each task on its own detached thread and collects results by
+/// index, waiting no longer than `deadline` in total. A slot stays
+/// `None` when its task has not reported by the deadline; that thread
+/// keeps running in the background and its result is dropped when it
+/// finally sends to the now-disconnected channel. Order matches the
+/// input, never completion order.
+fn collect_within<T, F>(tasks: Vec<F>, deadline: Duration) -> Vec<Option<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let count = tasks.len();
+    let (tx, rx) = mpsc::channel();
+
+    for (index, task) in tasks.into_iter().enumerate() {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            // The receiver may be gone (deadline passed); dropping the
+            // result is the intended straggler behaviour.
+            let _ = tx.send((index, task()));
+        });
+    }
+    // Drop the spare sender so `recv` disconnects once every task thread
+    // has sent (or panicked), letting the loop finish early when all
+    // report before the deadline.
+    drop(tx);
+
+    let mut results: Vec<Option<T>> = (0..count).map(|_| None).collect();
+    let until = Instant::now() + deadline;
+
+    for _ in 0..count {
+        let remaining = until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(remaining) {
+            Ok((index, value)) => results[index] = Some(value),
+            // Timed out, or every task thread is done: stop waiting.
+            Err(_) => break,
+        }
+    }
+
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_within_preserves_input_order_when_all_finish() {
+        let tasks: Vec<fn() -> usize> = vec![|| 0, || 1, || 2];
+
+        let results = collect_within(tasks, Duration::from_secs(30));
+
+        assert_eq!(results, vec![Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn collect_within_leaves_stragglers_empty_but_keeps_the_fast_ones() {
+        let tasks: Vec<fn() -> usize> = vec![
+            || 10,
+            || {
+                thread::sleep(Duration::from_secs(30));
+                11
+            },
+            || 12,
+        ];
+
+        let results = collect_within(tasks, Duration::from_millis(200));
+
+        // The slow task's slot stays empty; the others survive in order.
+        assert_eq!(results, vec![Some(10), None, Some(12)]);
     }
 }

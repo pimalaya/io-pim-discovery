@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `compose_all_within`, a deadline-bounded variant of `compose_all`.
+
+  It runs each discovery mechanism on its own detached thread and returns only the configs that completed within the given timeout. Mechanisms still running at the deadline are abandoned; they finish in the background and their output is dropped. This keeps an interactive caller (a setup wizard) responsive: a single unreachable endpoint, such as a firewalled port or a black-hole host, no longer stalls the whole fan-out until the operating system connect timeout expires.
+
 ## [0.3.3] - 2026-07-17
 
 ### Fixed

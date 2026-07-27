@@ -12,6 +12,13 @@
 //! Mechanism failures are logged and skipped: only an invalid email
 //! address fails the whole compose. Mechanisms irrelevant to the
 //! requested services are never started.
+//!
+//! [`compose_all`](DiscoveryComposeClientStd::compose_all) waits for
+//! every mechanism to finish. [`compose_all_within`](DiscoveryComposeClientStd::compose_all_within)
+//! bounds that wait to a deadline for interactive callers: each
+//! mechanism runs on its own detached thread and any still running at
+//! the deadline is abandoned, so a single unreachable endpoint cannot
+//! stall the whole discovery.
 
 use std::{
     sync::{Arc, mpsc},

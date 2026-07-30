@@ -29,7 +29,7 @@ pub enum EmailCommand {
     IsMicrosoft(EmailArgs),
     /// Mozilla/Thunderbird autoconfig (ISP URLs, ISPDB, mailconf).
     Autoconfig(EmailArgs),
-    /// RFC 6186 SRV records (`_imap(s)`, `_submission`).
+    /// RFC 6186 / RFC 8314 SRV records (`_imap(s)`, `_submission(s)`).
     Srv(EmailArgs),
     /// PACC configuration document.
     Pacc(EmailArgs),

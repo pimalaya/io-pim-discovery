@@ -263,8 +263,8 @@ impl DiscoveryServiceConfig {
 
     /// Converts an RFC 6186 SRV report into configs. SRV records
     /// advertise no authentication data, so password login is
-    /// assumed; `_imaps` maps to implicit TLS, `_imap` and
-    /// `_submission` to STARTTLS.
+    /// assumed; `_imaps` and `_submissions` (RFC 8314) map to implicit
+    /// TLS, `_imap` and `_submission` to STARTTLS.
     #[cfg(feature = "rfc6186")]
     pub fn from_srv(report: &DiscoverySrvReport) -> Vec<Self> {
         let services = [
@@ -277,6 +277,11 @@ impl DiscoveryServiceConfig {
                 DiscoveryService::Imap,
                 &report.imap,
                 DiscoverySecurity::Starttls,
+            ),
+            (
+                DiscoveryService::Smtp,
+                &report.submissions,
+                DiscoverySecurity::Tls,
             ),
             (
                 DiscoveryService::Smtp,
@@ -447,6 +452,49 @@ mod tests {
         DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoveryService,
         DiscoveryServiceConfig,
     };
+
+    #[cfg(feature = "rfc6186")]
+    #[test]
+    fn implicit_tls_submission_srv_becomes_a_tls_smtp_config() {
+        use crate::rfc6186::service::{DiscoverySrvReport, DiscoverySrvService};
+
+        // A domain that publishes only `_submissions._tcp` (RFC 8314
+        // implicit TLS, port 465), mirroring `_imaps` on the send side.
+        let report = DiscoverySrvReport {
+            imaps: Some(DiscoverySrvService {
+                host: "imap.migadu.com".to_string(),
+                port: 993,
+                priority: 0,
+                weight: 1,
+            }),
+            submissions: Some(DiscoverySrvService {
+                host: "smtp.migadu.com".to_string(),
+                port: 465,
+                priority: 0,
+                weight: 1,
+            }),
+            ..Default::default()
+        };
+
+        let configs = DiscoveryServiceConfig::from_srv(&report);
+
+        // The submission record must yield an SMTP endpoint at the
+        // advertised host over implicit TLS, not fall through to a
+        // guessed `smtp.<domain>` downstream.
+        let smtp = configs
+            .iter()
+            .find(|config| config.service == DiscoveryService::Smtp)
+            .expect("`_submissions` must produce an SMTP config");
+        assert_eq!(
+            smtp.endpoint,
+            DiscoveryEndpoint::Tcp {
+                host: "smtp.migadu.com".to_string(),
+                port: 465,
+                security: super::DiscoverySecurity::Tls,
+            },
+        );
+        assert_eq!(smtp.source, DiscoveryConfigSource::Srv);
+    }
 
     #[test]
     fn probed_schemes_beat_account_level_claims() {

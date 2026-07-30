@@ -17,6 +17,9 @@ pub struct DiscoverySrvReport {
     /// Best message submission SRV record (`_submission._tcp`), or
     /// `None` if absent.
     pub submission: Option<DiscoverySrvService>,
+    /// Best implicit-TLS message submission SRV record
+    /// (`_submissions._tcp`, RFC 8314), or `None` if absent.
+    pub submissions: Option<DiscoverySrvService>,
 }
 
 /// One SRV record stripped to the fields a mail client actually uses:

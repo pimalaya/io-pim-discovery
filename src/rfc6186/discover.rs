@@ -1,11 +1,11 @@
 //! # Combined RFC 6186 SRV discovery coroutine
 //!
-//! [`DiscoverySrv`] runs the three RFC 6186 SRV queries
+//! [`DiscoverySrv`] runs the four RFC 6186 / RFC 8314 SRV queries
 //! (`_imap._tcp.<domain>`, `_imaps._tcp.<domain>`,
-//! `_submission._tcp.<domain>`) in series, picks the best record per
-//! service (lowest priority, highest weight on ties; already sorted
-//! by [`DiscoveryDnsSrv`]), and yields a single [`DiscoverySrvReport`] when
-//! all three steps have completed.
+//! `_submission._tcp.<domain>`, `_submissions._tcp.<domain>`) in
+//! series, picks the best record per service (lowest priority, highest
+//! weight on ties; already sorted by [`DiscoveryDnsSrv`]), and yields a
+//! single [`DiscoverySrvReport`] when all four steps have completed.
 //!
 //! A per-service DNS failure (`InvalidQname`, `QueryTooLarge`,
 //! `InvalidResponse`) terminates the whole coroutine with
@@ -42,6 +42,9 @@ pub enum DiscoverySrvError {
     /// The `_submission._tcp` SRV lookup failed with a DNS-level error.
     #[error("DNS SRV lookup for `_submission._tcp` failed: {0}")]
     Submission(#[source] DiscoveryDnsSrvError),
+    /// The `_submissions._tcp` SRV lookup failed with a DNS-level error.
+    #[error("DNS SRV lookup for `_submissions._tcp` failed: {0}")]
+    Submissions(#[source] DiscoveryDnsSrvError),
 }
 
 #[derive(Default)]
@@ -49,12 +52,14 @@ enum State {
     Imap(DiscoveryDnsSrv),
     Imaps(DiscoveryDnsSrv),
     Submission(DiscoveryDnsSrv),
+    Submissions(DiscoveryDnsSrv),
     #[default]
     Done,
 }
 
-/// I/O-free combined coroutine that runs the three RFC 6186 SRV
-/// queries and assembles their best records into a [`DiscoverySrvReport`].
+/// I/O-free combined coroutine that runs the four RFC 6186 / RFC 8314
+/// SRV queries and assembles their best records into a
+/// [`DiscoverySrvReport`].
 pub struct DiscoverySrv {
     state: State,
     domain: String,
@@ -123,7 +128,11 @@ impl DiscoveryCoroutine for DiscoverySrv {
             State::Submission(mut srv) => match srv.resume(arg) {
                 DiscoveryCoroutineState::Complete(Ok(records)) => {
                     self.report.submission = records.into_iter().next().map(into_service);
-                    DiscoveryCoroutineState::Complete(Ok(mem::take(&mut self.report)))
+                    self.state = State::Submissions(DiscoveryDnsSrv::new(
+                        format!("_submissions._tcp.{}", self.domain),
+                        self.resolver.clone(),
+                    ));
+                    self.resume(None)
                 }
                 DiscoveryCoroutineState::Yielded(y) => {
                     self.state = State::Submission(srv);
@@ -131,6 +140,19 @@ impl DiscoveryCoroutine for DiscoverySrv {
                 }
                 DiscoveryCoroutineState::Complete(Err(err)) => {
                     DiscoveryCoroutineState::Complete(Err(DiscoverySrvError::Submission(err)))
+                }
+            },
+            State::Submissions(mut srv) => match srv.resume(arg) {
+                DiscoveryCoroutineState::Complete(Ok(records)) => {
+                    self.report.submissions = records.into_iter().next().map(into_service);
+                    DiscoveryCoroutineState::Complete(Ok(mem::take(&mut self.report)))
+                }
+                DiscoveryCoroutineState::Yielded(y) => {
+                    self.state = State::Submissions(srv);
+                    DiscoveryCoroutineState::Yielded(y)
+                }
+                DiscoveryCoroutineState::Complete(Err(err)) => {
+                    DiscoveryCoroutineState::Complete(Err(DiscoverySrvError::Submissions(err)))
                 }
             },
             State::Done => panic!("DiscoverySrv::resume called after completion"),

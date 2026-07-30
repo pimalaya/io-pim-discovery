@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   It runs each discovery mechanism on its own detached thread and returns only the configs that completed within the given timeout. Mechanisms still running at the deadline are abandoned; they finish in the background and their output is dropped. This keeps an interactive caller (a setup wizard) responsive: a single unreachable endpoint, such as a firewalled port or a black-hole host, no longer stalls the whole fan-out until the operating system connect timeout expires.
 
+### Fixed
+
+- Added the `_submissions._tcp` SRV lookup (RFC 8314) to mail service discovery.
+
+  SRV discovery already queried both `_imap._tcp` (STARTTLS) and `_imaps._tcp` (implicit TLS) on the receive side, but on the send side it queried only `_submission._tcp` (STARTTLS, port 587), never the implicit-TLS `_submissions._tcp` (port 465) counterpart. A domain publishing only `_submissions` (mirroring its `_imaps`) therefore had its IMAP endpoint discovered but no SMTP one, leaving a consumer to fall back to a guessed `smtp.<domain>`. `DiscoverySrv` now runs the fourth lookup, `DiscoverySrvReport` carries a `submissions` slot, and `from_srv` maps it to an implicit-TLS SMTP config.
+
 ## [0.3.3] - 2026-07-17
 
 ### Fixed

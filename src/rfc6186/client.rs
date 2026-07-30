@@ -1,7 +1,7 @@
 //! # Standard, blocking RFC 6186 SRV discovery client
 //!
 //! [`DiscoverySrvClientStd`] drives the [`DiscoverySrv`] combined
-//! coroutine (three SRV queries → best-record-per-service assembly)
+//! coroutine (four SRV queries → best-record-per-service assembly)
 //! end-to-end through a local [`DiscoveryStreamPool`]. One method:
 //! [`discover`].
 //!
@@ -76,9 +76,9 @@ impl DiscoverySrvClientStd {
         self
     }
 
-    /// Runs the three RFC 6186 SRV lookups (`_imap._tcp`,
-    /// `_imaps._tcp`, `_submission._tcp`) on `domain` and returns
-    /// the best record per service.
+    /// Runs the four RFC 6186 / RFC 8314 SRV lookups (`_imap._tcp`,
+    /// `_imaps._tcp`, `_submission._tcp`, `_submissions._tcp`) on
+    /// `domain` and returns the best record per service.
     pub fn discover(
         &mut self,
         domain: &str,

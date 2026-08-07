@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-07
+
+### Changed
+
+- **BREAKING** Bumped `pimalaya-cli` from v0.1 to v0.2, which re-exports `comfy-table` v8 instead of v7.
+
+  `cli::common::table` returns a `comfy-table` v8 `Table`, a distinct type from the v7 one it returned before. Callers styling the returned table replace `load_preset(&str)` with `load_style(TableStyle)`, and read the `presets::*` constants as `TableStyle` values rather than strings. Consumers depending on both this crate and `pimalaya-cli` bump their own requirement to v0.2 in step, so a single version resolves.
+
 ## [0.4.0] - 2026-08-07
 
 ### Added
@@ -108,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added CLI (requires `cli` feature).
 
-[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.4.0..HEAD
+[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.5.0..HEAD
+[0.5.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.4.0..v0.5.0
 [0.4.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.3..v0.4.0
 [0.3.3]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.2..v0.3.3
 [0.3.2]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.1..v0.3.2

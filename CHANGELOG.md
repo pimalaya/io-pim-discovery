@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped pimalaya-stream to 0.2, which drops the `sasl` module it no longer owns. The `Tls` type this crate takes comes from that version, so a consumer must move with it.
+
 ## [0.5.0] - 2026-08-07
 
 ### Changed

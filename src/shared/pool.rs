@@ -115,34 +115,38 @@ impl DiscoveryStreamPool {
         self
     }
 
-    /// Registers `http` and `https` factories backed by
-    /// [`StreamStd`]. The plain `http` factory opens a TCP socket; the
-    /// `https` factory runs the TLS handshake described by `tls`.
+    /// Registers `http` and `https` factories backed by pimalaya-stream.
+    /// The plain `http` factory opens a TCP socket; the `https` factory
+    /// runs the TLS handshake described by `tls`.
     ///
     /// HTTPS connections fail at runtime if no TLS provider feature is
     /// enabled on `pimalaya-stream`. Gated by the `stream` feature;
     /// light clients that do not pull `pimalaya-stream` register their
     /// own `http`/`https` factories via [`with_factory`].
     ///
-    /// [`StreamStd`]: pimalaya_stream::std::stream::StreamStd
     /// [`with_factory`]: Self::with_factory
     #[cfg(feature = "stream")]
     pub fn with_http_factories(self, tls: pimalaya_stream::tls::Tls) -> Self {
-        use pimalaya_stream::std::stream::StreamStd;
+        use pimalaya_stream::stream::{Stream, TcpConnectOptions, TlsConnectOptions};
 
-        self.with_factory("http", |url: &Url| -> Result<StreamStd> {
+        self.with_factory("http", |url: &Url| -> Result<Stream> {
             let Some(host) = url.host_str() else {
                 bail!("HTTP URL `{url}` has no host");
             };
             let port = url.port_or_known_default().unwrap_or(80);
-            StreamStd::connect_tcp(host, port)
+            Stream::connect_tcp(host, port, TcpConnectOptions::default())
         })
-        .with_factory("https", move |url: &Url| -> Result<StreamStd> {
+        .with_factory("https", move |url: &Url| -> Result<Stream> {
             let Some(host) = url.host_str() else {
                 bail!("HTTPS URL `{url}` has no host");
             };
             let port = url.port_or_known_default().unwrap_or(443);
-            StreamStd::connect_tls(host, port, &tls)
+            let opts = TlsConnectOptions {
+                tls: tls.clone(),
+                ..Default::default()
+            };
+
+            Stream::connect_tls(host, port, opts)
         })
     }
 

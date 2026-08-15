@@ -14,6 +14,7 @@ This project is composed of 3 feature-gated layers:
 - [Coverage](#coverage)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Examples](#examples)
 - [FAQ](#faq)
 - [AI policy](https://github.com/pimalaya/.github/blob/master/AI_POLICY.md)
 - [License](#license)
@@ -90,7 +91,11 @@ pim-discovery auth server https://api.fastmail.com
 pim-discovery --json all user@fastmail.com
 ```
 
-Run pim-discovery --help for the full command tree, flags and TLS options. The library API, including every coroutine and client, is documented on [docs.rs](https://docs.rs/io-pim-discovery/latest/io_pim_discovery).
+Run `pim-discovery --help` for the full command tree, flags and TLS options. See documentation at [docs.rs](https://docs.rs/io-pim-discovery/latest/io_pim_discovery).
+
+## Examples
+
+See complete examples at [./examples](./examples).
 
 ## FAQ
 

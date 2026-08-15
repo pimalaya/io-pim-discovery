@@ -14,7 +14,7 @@
 //!   [`with_factory`].
 //! - Full: under the `stream` feature, chain [`with_tls`] after
 //!   [`new`] to auto-register `http` / `https` factories backed by
-//!   [`pimalaya_stream::std::stream::StreamStd`].
+//!   [`pimalaya_stream::stream::Stream`].
 //!
 //! [`new`]: DiscoveryAutoconfigClientStd::new
 //! [`with_factory`]: DiscoveryAutoconfigClientStd::with_factory
@@ -104,7 +104,7 @@ impl DiscoveryAutoconfigClientStd {
     }
 
     /// Bootstraps the pool with `http` / `https` factories backed by
-    /// [`pimalaya_stream::std::stream::StreamStd`] using the given
+    /// [`pimalaya_stream::stream::Stream`] using the given
     /// `tls` profile. ALPN is read from `tls.rustls.alpn`; callers
     /// typically pre-populate it with `["http/1.1"]`. Gated by the
     /// `stream` feature.

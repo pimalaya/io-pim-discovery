@@ -7,17 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-15
+
 ### Changed
 
-- Bumped pimalaya-stream to 0.2, which drops the `sasl` module it no longer owns. The `Tls` type this crate takes comes from that version, so a consumer must move with it.
+- Bumped io-http to 0.4 and pimalaya-stream to 0.2. **Breaking.**
+
+  The `Tls` type taken by every client's `with_tls` comes from pimalaya-stream 0.2, so a consumer bumps in step for a single version to resolve.
+
+- Raised the minimum supported Rust version from 1.87 to 1.88.
 
 ## [0.5.0] - 2026-08-07
 
 ### Changed
 
-- **BREAKING** Bumped `pimalaya-cli` from v0.1 to v0.2, which re-exports `comfy-table` v8 instead of v7.
+- Bumped pimalaya-cli to 0.2, which re-exports comfy-table 8 instead of 7. **Breaking.**
 
-  `cli::common::table` returns a `comfy-table` v8 `Table`, a distinct type from the v7 one it returned before. Callers styling the returned table replace `load_preset(&str)` with `load_style(TableStyle)`, and read the `presets::*` constants as `TableStyle` values rather than strings. Consumers depending on both this crate and `pimalaya-cli` bump their own requirement to v0.2 in step, so a single version resolves.
+  `cli::common::table` returns a comfy-table 8 `Table`, a distinct type from the 7 one. Callers styling it replace `load_preset(&str)` with `load_style(TableStyle)`, and read the `presets::*` constants as `TableStyle` values rather than strings.
 
 ## [0.4.0] - 2026-08-07
 
@@ -25,25 +31,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `compose_all_within`, a deadline-bounded variant of `compose_all`.
 
-  It runs each discovery mechanism on its own detached thread and returns only the configs that completed within the given timeout. Mechanisms still running at the deadline are abandoned; they finish in the background and their output is dropped. This keeps an interactive caller (a setup wizard) responsive: a single unreachable endpoint, such as a firewalled port or a black-hole host, no longer stalls the whole fan-out until the operating system connect timeout expires.
+  Each mechanism runs on its own detached thread and only the configs completing within the timeout are returned, so one unreachable endpoint no longer stalls an interactive wizard until the operating system connect timeout expires.
 
 ### Fixed
 
-- Added the `_submissions._tcp` SRV lookup (RFC 8314) to mail service discovery.
+- Added the missing `_submissions._tcp` SRV lookup (RFC 8314) to mail service discovery.
 
-  SRV discovery already queried both `_imap._tcp` (STARTTLS) and `_imaps._tcp` (implicit TLS) on the receive side, but on the send side it queried only `_submission._tcp` (STARTTLS, port 587), never the implicit-TLS `_submissions._tcp` (port 465) counterpart. A domain publishing only `_submissions` (mirroring its `_imaps`) therefore had its IMAP endpoint discovered but no SMTP one, leaving a consumer to fall back to a guessed `smtp.<domain>`. `DiscoverySrv` now runs the fourth lookup, `DiscoverySrvReport` carries a `submissions` slot, and `from_srv` maps it to an implicit-TLS SMTP config.
+  Only `_submission._tcp` (STARTTLS, port 587) was queried on the send side, so a domain publishing just the implicit-TLS variant got its IMAP endpoint discovered and no SMTP one. `DiscoverySrv` runs the fourth lookup, `DiscoverySrvReport` carries a `submissions` slot, and `from_srv` maps it to an implicit-TLS SMTP config.
 
 ## [0.3.3] - 2026-07-17
 
 ### Fixed
 
-- Corrected the Microsoft IMAP/POP/SMTP OAuth scopes to use the `https://outlook.office.com/` resource instead of `https://outlook.office365.com/`. The latter is the server host, not a valid scope resource, so Microsoft's authorize endpoint rejected it with `invalid_scope` ("The provided resource value for the input parameter 'scope' is not valid"). The server hosts (`outlook.office365.com`, `smtp.office365.com`) are unchanged.
+- Corrected the Microsoft IMAP/POP/SMTP OAuth scopes to use the `https://outlook.office.com/` resource.
+
+  `https://outlook.office365.com/` is the server host, not a valid scope resource, so Microsoft's authorize endpoint rejected it with `invalid_scope`. The server hosts themselves are unchanged.
 
 ## [0.3.2] - 2026-07-16
 
 ### Fixed
 
-- Restored all DNS-based discovery (RFC 6186/6764/8620 SRV lookups, MX provider detection and the PACC DNS-TXT digest verification), broken since 0.3.0 by the move to the `domain` 0.12.2 `unstable-new` API. Its `RevNameBuf` parser rejects relative names, but every query name was built without a trailing dot, so each lookup failed with `NameParseError::Relative` and its mechanism was silently skipped. Query names are now made absolute before parsing. This notably restores OAuth issuer discovery for providers that advertise it only through PACC, such as Fastmail.
+- Restored all DNS-based discovery (SRV lookups, MX provider detection, PACC DNS-TXT digest verification), broken since 0.3.0.
+
+  The `domain` 0.12.2 `unstable-new` parser rejects relative names, and every query name was built without a trailing dot, so each lookup failed and its mechanism was silently skipped. Query names are made absolute before parsing. This notably restores OAuth issuer discovery for providers advertising it only through PACC, such as Fastmail.
 
 ## [0.3.1] - 2026-07-16
 
@@ -59,13 +69,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   For example `ComposeClientStd` became `DiscoveryComposeClientStd`; `ResolveDav`, `ResolveJmap`, `ResolveOauthServer` and `ResolveOauthResource` became `DiscoveryDavResolve`, `DiscoveryJmapResolve`, `DiscoveryOauthServerResolve` and `DiscoveryOauthResourceResolve`; `WellKnown` became `DiscoveryWellKnown`; `ProbeAuth` became `DiscoveryProbeAuth`; `ConfigCollector` became `DiscoveryConfigCollector`; and the shared data types `Service`, `ServiceConfig`, `AuthMethod`, `DavService`, `OauthServerMetadata` and `OauthResourceMetadata` gained the same prefix. The wire-format schema types were prefixed too: the autoconfig XML structs (`DiscoveryAutoconfig`, `DiscoveryEmailProvider`, `DiscoveryServer`, `DiscoveryServerType`, `DiscoverySecurityType`, `DiscoveryAuthenticationType`, …), the PACC JSON structs (`DiscoveryPaccConfig`, `DiscoveryProtocols`, `DiscoveryAuthentication`, `DiscoveryProvider`, …), and `DiscoverySrvReport`, `DiscoverySrvService`, `DiscoveryWebdavSrvReport` and `DiscoveryJmapSessionResource`. The compose config model was prefixed as well (`Endpoint`, `Security`, `ConfigSource` became `DiscoveryEndpoint`, `DiscoverySecurity`, `DiscoveryConfigSource`), the stream-pool trait `Stream` became `DiscoveryStream`, and the known-provider enum `Provider` became `DiscoveryKnownProvider` (kept distinct from the PACC `DiscoveryProvider`). Only the CLI command types keep their unprefixed names.
 
-- Moved each mechanism's data types out of a `types` catch-all module into a named public module, path-visible with no re-export: the autoconfig, PACC and composed-config schemas now live in `autoconfig::config`, `pacc::config` and `compose::config`, and the SRV and DAV service types in `rfc6186::service` and `rfc6764::service` (so e.g. `autoconfig::types::EmailProvider` is now `autoconfig::config::EmailProvider`).
+- Moved each mechanism's data types out of a `types` catch-all into a named public module, path-visible with no re-export.
 
-- Switched the DNS coroutines to the `domain` 0.12.2 `unstable-new` SRV API. The owned answer aliases are now `TxtRecord` and `SrvRecord` (`Record<RevNameBuf, Box<Txt>>` / `Record<RevNameBuf, Box<Srv>>`) and `MxRecord` (`Record<RevNameBuf, Mx<NameBuf>>`), all with public fields instead of accessor methods; the git patch that pinned the unreleased revision is gone.
+  The autoconfig, PACC and composed-config schemas live in `autoconfig::config`, `pacc::config` and `compose::config`, and the SRV and DAV service types in `rfc6186::service` and `rfc6764::service`. So `autoconfig::types::EmailProvider` is now `autoconfig::config::EmailProvider`.
+
+- Switched the DNS coroutines to the `domain` 0.12.2 `unstable-new` SRV API, dropping the git patch that pinned the unreleased revision.
+
+  The owned answer aliases are now `TxtRecord`, `SrvRecord` and `MxRecord`, all with public fields instead of accessor methods.
 
 - Bumped io-http to 0.3, pimalaya-stream to 0.1 and pimalaya-cli to 0.1.
 
-- Documented every public item and aligned the crate with the Pimalaya documentation guidelines: the src/lib.rs architecture header replaced the README include, the README dropped its inline code, and docs.rs now builds with all features.
+- Documented every public item and aligned the crate with the Pimalaya documentation guidelines.
+
+  The src/lib.rs architecture header replaced the README include, the README dropped its inline code, and docs.rs builds with all features.
 
 ### Fixed
 
@@ -75,29 +91,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added the unified `compose` orchestrator (`ComposeClientStd`): one email or domain into a `ServiceConfig` list, chaining provider rules, PACC, autoconfig, RFC 6186 SRV, RFC 6764 DAV and RFC 8620 JMAP; `compose_all` merges across mechanisms, `compose_first` keeps the highest-priority hit, `compose_raw` returns them unmerged.
-- Added RFC 8620 JMAP autodiscovery (`rfc8620` feature): `ResolveJmap` chains a `_jmap._tcp` SRV lookup and a `/.well-known/jmap` probe, following redirects and judging the terminal 2xx/401.
-- Added RFC 8484 DNS-over-HTTPS: `DnsExchange` picks `tcp://` length-framing or an `https://…/dns-query` POST from the resolver URL, so every DNS mechanism accepts a DoH resolver; the CLI `--server` flags take a URL too.
-- Added a per-endpoint authentication probe (`rfc9110` module, `ProbeAuth`): reads `WWW-Authenticate` on an unauthenticated 401 to refine each config's `password`/`bearer` methods (OAuth methods untouched).
+- Added the unified `compose` orchestrator (`ComposeClientStd`), turning one email or domain into a `ServiceConfig` list.
+
+  It chains provider rules, PACC, autoconfig, RFC 6186 SRV, RFC 6764 DAV and RFC 8620 JMAP. `compose_all` merges across mechanisms, `compose_first` keeps the highest-priority hit, `compose_raw` returns them unmerged.
+
+- Added RFC 8620 JMAP autodiscovery behind the `rfc8620` feature.
+
+  `ResolveJmap` chains a `_jmap._tcp` SRV lookup and a `/.well-known/jmap` probe, following redirects and judging the terminal 2xx or 401.
+
+- Added RFC 8484 DNS-over-HTTPS, so every DNS mechanism accepts a DoH resolver.
+
+  `DnsExchange` picks `tcp://` length-framing or an `https://…/dns-query` POST from the resolver URL, and the CLI `--server` flags take a URL too.
+
+- Added a per-endpoint authentication probe (`rfc9110` module, `ProbeAuth`).
+
+  It reads `WWW-Authenticate` on an unauthenticated 401 to refine each config's `password` and `bearer` methods, leaving OAuth methods untouched.
+
 - Added the `Bearer` authentication method, detected from the JMAP session probe.
-- Added the OAuth 2.0 metadata modules `rfc8414` (authorization server) and `rfc9728` (protected resource), moved from io-oauth: the `ResolveOauthServer` / `ResolveOauthResource` coroutines, `ComposeClientStd::oauth_server` / `oauth_resource`, and the CLI `auth server` / `auth resource` commands.
-- Added automatic OAuth issuer resolution: `compose` fetches a discovered `OauthIssuer`'s RFC 8414 metadata and upgrades it to a concrete `OauthAuthorizationCodeGrant` (plus device grant when advertised).
+- Added the OAuth 2.0 metadata modules `rfc8414` (authorization server) and `rfc9728` (protected resource), moved from io-oauth.
+
+  They bring the `ResolveOauthServer` and `ResolveOauthResource` coroutines, `ComposeClientStd::oauth_server` and `oauth_resource`, and the CLI `auth server` and `auth resource` commands.
+
+- Added automatic OAuth issuer resolution.
+
+  `compose` fetches a discovered `OauthIssuer`'s RFC 8414 metadata and upgrades it to a concrete `OauthAuthorizationCodeGrant`, plus a device grant when advertised.
 
 ### Changed
 
-- Renamed the crate from `pimconf` to `io-pim-discovery` (library path `io_pim_discovery`); the CLI binary is `pim-discovery`.
+- Renamed the crate from `pimconf` to `io-pim-discovery`, library path `io_pim_discovery` and CLI binary `pim-discovery`.
 - Gated the CLI behind a non-default `cli` feature.
-- Made `compose` plain library code instead of a feature: it lives behind `stream` plus at least one discovery mechanism, and composes whichever mechanisms are enabled, skipping the rest.
-- Organised the CLI by PIM domain (`all`, `email` / `calendar` / `contact` / `file`, `auth`) instead of by mechanism, dropping RFC-numbered command names; provider detection is `email is-google` / `email is-microsoft`, and mechanisms are shown independently (the CLI never merges). The old flat `autoconfig` / `pacc` / `srv` / `webdav` / `search` commands are gone.
-- Replaced the serial `SearchAll` / `SearchFirst` coroutines with bricks (the pure `ConfigCollector` plus the per-mechanism coroutines) orchestrated by `ComposeClientStd`, one thread per mechanism and one probe per config.
+- Made `compose` plain library code instead of a feature.
+
+  It lives behind `stream` plus at least one discovery mechanism, and composes whichever mechanisms are enabled, skipping the rest.
+
+- Organised the CLI by PIM domain (`all`, `email`, `calendar`, `contact`, `file`, `auth`) instead of by mechanism.
+
+  The old flat `autoconfig`, `pacc`, `srv`, `webdav` and `search` commands are gone, provider detection is `email is-google` and `email is-microsoft`, and mechanisms are shown independently since the CLI never merges.
+
+- Replaced the serial `SearchAll` and `SearchFirst` coroutines with bricks orchestrated by `ComposeClientStd`.
+
+  The bricks are the pure `ConfigCollector` plus the per-mechanism coroutines, run one thread per mechanism and one probe per config.
+
 - Switched the DNS coroutines from the unreleased `domain` new API to the stable release, dropping the git patch and unblocking releases.
-- Made the DNS coroutines honor the EOF convention: an empty resume slice ends them with an `Eof` error instead of yielding reads forever on a dead stream.
+- Made the DNS coroutines honor the EOF convention, an empty resume slice ending them with an `Eof` error instead of yielding reads forever on a dead stream.
 - Made the RFC 6764 resolve fall back to the `.well-known` probe when the SRV lookup fails.
 
 ### Fixed
 
-- Deduplicated a service reached under two names: HTTP endpoints compare as normalized URLs, and a subdomain host merges into its parent (fastmail's rotated CardDAV shards).
-- Fixed the assumed JMAP authentication order when the endpoint advertises no scheme: bearer first, password second.
+- Deduplicated a service reached under two names.
+
+  HTTP endpoints compare as normalized URLs, and a subdomain host merges into its parent, as fastmail's rotated CardDAV shards need.
+
+- Fixed the assumed JMAP authentication order when the endpoint advertises no scheme, bearer first and password second.
 - Fixed the PACC `oauth-public` / `content-type` keys not deserializing from their wire names, which silently dropped a provider's OAuth issuer.
 
 ## [0.1.0] - 2026-06-06
@@ -120,7 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added CLI (requires `cli` feature).
 
-[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.5.0..HEAD
+[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.6.0..HEAD
+[0.6.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.5.0..v0.6.0
 [0.5.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.4.0..v0.5.0
 [0.4.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.3..v0.4.0
 [0.3.3]: https://github.com/pimalaya/io-pim-discovery/compare/v0.3.2..v0.3.3

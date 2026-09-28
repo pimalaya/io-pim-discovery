@@ -1,7 +1,7 @@
 ---
 cairn: change
 id: jmap-session-validation
-status: active
+status: landed
 created: 2026-09-06
 issue: https://github.com/pimalaya/io-pim-discovery/issues/1
 ---
@@ -30,8 +30,8 @@ Fastmail is the counter-example the fix must keep. Its session is not on the ape
 The terminal response of the redirect walk is validated instead of merely counted:
 
 - The probe sends `Accept: application/json`, so a server is free to content-negotiate rather than hand back its HTML page.
-- A 2xx resolves to a session resource only when its `Content-Type` is `application/json` and its body parses as a JSON object carrying `capabilities` (including `urn:ietf:params:jmap:core`) and `apiUrl`. Anything else resolves to `None`.
-- A 401 keeps resolving to a session resource, since discovery runs unauthenticated and the body is not the session, but only when it carries a `WWW-Authenticate` challenge, or at least is not `text/html`. A generic portal 401 no longer counts as JMAP.
+- A 2xx resolves to a session resource only when its body parses as a JSON object carrying `capabilities` (including `urn:ietf:params:jmap:core`) and `apiUrl`. The `Content-Type` is not checked: the body shape is the proof, and a strict media-type test would only reject sessions served as `application/json; charset=utf-8` or under a sloppy type. Anything else resolves to `None`.
+- A 401 keeps resolving to a session resource, since discovery runs unauthenticated and the body is not the session, but only when it carries a `WWW-Authenticate` challenge, which RFC 9110 §15.5.2 makes mandatory on a 401. A portal 401 without one no longer counts as JMAP, whatever its content type.
 - `Http11WellKnownOutput::same_origin`, discarded today, is traced on each hop. It is not a validity signal on its own (Fastmail redirects same-origin, ik.me cross-origin) but it explains a rejection when reading logs.
 - `DiscoveryServiceConfig::from_jmap` stops inventing `bearer, password` from an empty scheme list. A session resource that advertised nothing reports nothing.
 
@@ -39,6 +39,8 @@ This stays inside this crate. io-jmap owns `JmapSession` and does not depend on 
 
 ## Cost
 
-A domain whose JMAP server answers 200 with a session document under a non-JSON content type, or a 401 in HTML with no challenge, is no longer discovered. Both are already broken against any RFC 8620 client, and the trace says which check rejected them.
+A domain whose JMAP server answers a 401 without a `WWW-Authenticate` challenge is no longer discovered. It already violates RFC 9110, and the trace says which check rejected it.
+
+With no invented schemes, a consumer receiving an empty auth list decides what to offer. Himalaya's wizard already offers both password and bearer then; the other wizards are checked as part of this change.
 
 Out of scope, and worth its own change: the redirect walk now exists in three variants in this crate (`rfc8620::well_known` and `rfc9110`, both copies of the same five-hop loop, plus `rfc6764::well_known` following a single hop). Lifting it into io-http needs io-http's yields to carry the current target URL, which is what `DiscoveryStreamPool` routes on.

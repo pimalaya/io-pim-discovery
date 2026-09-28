@@ -10,8 +10,8 @@
 //!
 //! When the domain publishes no SRV record it falls back to
 //! `https://<domain>:443/` and probes `.well-known/jmap` there. An
-//! origin answering neither a redirect nor 2xx/401 on the probe means
-//! no JMAP service: the resolve completes with
+//! origin whose redirect chain ends on neither a session object nor a
+//! challenged 401 means no JMAP service: the resolve completes with
 //! [`DiscoveryJmapResolveError::NotFound`].
 //!
 //! Composing the DNS step (over the `tcp://` resolver) and the HTTPS

@@ -335,11 +335,9 @@ impl DiscoveryServiceConfig {
     /// Wraps an RFC 8620 JMAP session URL into a single config. The
     /// authentication methods derive from the schemes the session
     /// endpoint advertised on its unauthenticated 401 (`basic` means
-    /// password login, `bearer` a bearer token); with no advertisement
-    /// both are assumed, the bearer token first: the JMAP ecosystem is
-    /// token-first (fastmail only accepts API tokens), and a wrongly
-    /// assumed method fails visibly at the connection check while a
-    /// missing one is a dead end.
+    /// password login, `bearer` a bearer token). With no advertisement
+    /// the list stays empty: which methods to offer then is the
+    /// consumer's call, not a fact discovery found.
     pub fn from_jmap(url: impl ToString, schemes: &[String]) -> Self {
         let mut auth = Vec::new();
 
@@ -349,10 +347,6 @@ impl DiscoveryServiceConfig {
                 "bearer" => auth.push(DiscoveryAuthMethod::Bearer),
                 _ => (),
             }
-        }
-
-        if auth.is_empty() {
-            auth = vec![DiscoveryAuthMethod::Bearer, DiscoveryAuthMethod::Password];
         }
 
         Self {

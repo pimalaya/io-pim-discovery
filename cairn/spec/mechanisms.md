@@ -21,7 +21,7 @@ The `rfc6186` mechanism SHALL run four SRV lookups on the domain: `_imap._tcp` (
 The `rfc6764` mechanism SHALL resolve CalDAV and CardDAV context paths for a domain through the RFC 6764 well-known and SRV/TXT discovery, yielding one config per DAV service.
 
 ### Requirement: RFC 8620 JMAP
-The `rfc8620` mechanism SHALL resolve the JMAP session resource (`.well-known/jmap`, following redirects) and yield a JMAP config carrying the session URL and its advertised auth schemes.
+The `rfc8620` mechanism SHALL resolve the JMAP session resource (`.well-known/jmap`, requested with `Accept: application/json`, following redirects) and yield a JMAP config carrying the session URL and its advertised auth schemes. The terminal response of the walk SHALL be validated before it counts as a session resource: a 2xx qualifies only when its body parses as a JSON object carrying `capabilities` (including `urn:ietf:params:jmap:core`) and `apiUrl`, whatever its content type; a 401 qualifies only when it carries a `WWW-Authenticate` challenge, since discovery runs unauthenticated and the body is not the session. Any other response means no JMAP behind that origin. A session resource that advertised no scheme SHALL report none rather than assuming password or bearer login.
 
 ### Requirement: OAuth metadata
 The `rfc8414` and `rfc9728` mechanisms SHALL fetch OAuth 2.0 authorization-server metadata (RFC 8414) for an issuer and protected-resource metadata (RFC 9728) for a resource, exposing the endpoints and supported grants a broker needs.

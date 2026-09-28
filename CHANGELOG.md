@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `DiscoveryServiceConfig::from_jmap` no longer assumes bearer and password when the session resource advertised no scheme. **Behaviour change.**
+
+  The auth list is left empty, so a consumer decides what to offer rather than reading a guess as a finding.
+
+### Fixed
+
+- Stopped reporting a login or marketing page as a JMAP session resource.
+
+  The `.well-known/jmap` probe accepted any 2xx or 401 at the end of its redirect chain, so a domain bouncing it onto an HTML login form, such as ik.me, was listed as JMAP ([himalaya#745](https://github.com/pimalaya/himalaya/issues/745)). The probe now asks for `application/json`, accepts a 2xx only when its body is a session object carrying the core capability and an `apiUrl`, and a 401 only when it carries a `WWW-Authenticate` challenge.
+
 ## [0.7.0] - 2026-08-15
 
 ### Changed

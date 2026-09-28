@@ -139,9 +139,10 @@ impl DiscoveryWebdavClientStd {
     }
 
     /// Resolves `domain` to a CalDAV/CardDAV context root: runs the SRV
-    /// lookups, then follows the `.well-known` redirect on the best
-    /// origin. Falls back to `https://<domain>:443/` when no SRV record
-    /// is published. Requires [`with_tls`](Self::with_tls) so the pool
+    /// lookups, then tries the TXT path, the `.well-known` redirect and
+    /// the origin itself, keeping the first that leads to a DAV server.
+    /// The origin is `https://<domain>:443/` when no SRV record is
+    /// published. Requires [`with_tls`](Self::with_tls) so the pool
     /// can open the HTTPS `.well-known` connection.
     #[cfg(feature = "stream")]
     pub fn resolve(
@@ -157,9 +158,9 @@ impl DiscoveryWebdavClientStd {
     }
 
     /// Probes `.well-known/{service}` on `origin` (a scheme + host +
-    /// port root) as a standalone mechanism: returns `Some(location)`
-    /// when the origin redirects to a context root, `None` when it does
-    /// not. Lets callers order it freely against SRV/PACC. Requires
+    /// port root) as a standalone mechanism: returns `Some(root)` when
+    /// the origin redirects to a DAV server, `None` when it does not.
+    /// Lets callers order it freely against SRV/PACC. Requires
     /// [`with_tls`](Self::with_tls).
     #[cfg(feature = "stream")]
     pub fn well_known(

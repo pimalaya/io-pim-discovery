@@ -12,18 +12,17 @@
 use alloc::{string::String, vec::Vec};
 
 use io_http::{
-    coroutine::{HttpCoroutine, HttpCoroutineState, HttpYield},
-    rfc8615::well_known::{Http11WellKnown, Http11WellKnownError},
+    rfc8615::well_known::Http11WellKnownError,
     rfc9110::{request::HttpRequest, response::HttpResponse},
 };
 use log::trace;
 use thiserror::Error;
 use url::Url;
 
-use crate::coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield};
-
-/// Redirect hops followed before giving up on a looping chain.
-const MAX_HOPS: u8 = 5;
+use crate::{
+    coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
+    shared::walk::DiscoveryHttpWalk,
+};
 
 /// Errors emitted by [`DiscoveryProbeAuth`].
 #[derive(Debug, Error)]
@@ -41,25 +40,14 @@ pub enum DiscoveryProbeAuthError {
 /// advertised (empty when it advertised none, or the redirect chain
 /// looped).
 pub struct DiscoveryProbeAuth {
-    target: Url,
-    hops: u8,
-    probe: Http11WellKnown,
+    walk: DiscoveryHttpWalk,
 }
 
 impl DiscoveryProbeAuth {
     /// Builds a probe against `target`, any HTTP URL.
     pub fn new(target: Url) -> Self {
-        Self::request(target, 0)
-    }
-
-    /// One GET of the redirect walk, against `target`.
-    fn request(target: Url, hops: u8) -> Self {
-        let probe = Http11WellKnown::new(HttpRequest::get(target.clone()));
-
         Self {
-            target,
-            hops,
-            probe,
+            walk: DiscoveryHttpWalk::new(HttpRequest::get(target)),
         }
     }
 }
@@ -69,39 +57,20 @@ impl DiscoveryCoroutine for DiscoveryProbeAuth {
     type Return = Result<Vec<String>, DiscoveryProbeAuthError>;
 
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
-        match self.probe.resume(arg) {
-            HttpCoroutineState::Yielded(HttpYield::WantsRead) => {
-                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead {
-                    url: self.target.clone(),
-                })
+        match self.walk.resume(arg) {
+            DiscoveryCoroutineState::Yielded(y) => DiscoveryCoroutineState::Yielded(y),
+            DiscoveryCoroutineState::Complete(Ok(None)) => {
+                DiscoveryCoroutineState::Complete(Ok(Vec::new()))
             }
-            HttpCoroutineState::Yielded(HttpYield::WantsWrite(bytes)) => {
-                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite {
-                    url: self.target.clone(),
-                    bytes,
-                })
+            DiscoveryCoroutineState::Complete(Ok(Some(output))) => {
+                let schemes = auth_schemes(&output.response);
+                trace!(
+                    "auth probe answered {} at {} (schemes {schemes:?})",
+                    *output.response.status, output.url,
+                );
+                DiscoveryCoroutineState::Complete(Ok(schemes))
             }
-            HttpCoroutineState::Complete(Ok(output)) => match output.redirect_url {
-                Some(next) => {
-                    if self.hops >= MAX_HOPS {
-                        trace!("auth probe redirected more than {MAX_HOPS} times, give up");
-                        return DiscoveryCoroutineState::Complete(Ok(Vec::new()));
-                    }
-
-                    trace!("auth probe redirected to {next}");
-                    *self = Self::request(next, self.hops + 1);
-                    self.resume(None)
-                }
-                None => {
-                    let schemes = auth_schemes(&output.response);
-                    trace!(
-                        "auth probe answered {} at {} (schemes {schemes:?})",
-                        *output.response.status, self.target,
-                    );
-                    DiscoveryCoroutineState::Complete(Ok(schemes))
-                }
-            },
-            HttpCoroutineState::Complete(Err(err)) => {
+            DiscoveryCoroutineState::Complete(Err(err)) => {
                 DiscoveryCoroutineState::Complete(Err(err.into()))
             }
         }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `rfc6764::context::DiscoveryDavContext`, which checks that a URL leads to a CalDAV or CardDAV server through an unauthenticated `PROPFIND`.
+
+- Added `shared::walk::DiscoveryHttpWalk`, the redirect walk the `.well-known` and auth probes now share.
+
 ### Changed
 
 - `DiscoveryServiceConfig::from_jmap` no longer assumes bearer and password when the session resource advertised no scheme. **Behaviour change.**
@@ -18,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped reporting a login or marketing page as a JMAP session resource.
 
   The `.well-known/jmap` probe accepted any 2xx or 401 at the end of its redirect chain, so a domain bouncing it onto an HTML login form, such as ik.me, was listed as JMAP ([himalaya#745](https://github.com/pimalaya/himalaya/issues/745)). The probe now asks for `application/json`, accepts a 2xx only when its body is a session object carrying the core capability and an `apiUrl`, and a 401 only when it carries a `WWW-Authenticate` challenge.
+
+- Stopped reporting a URL without a DAV server behind it as a CalDAV or CardDAV context root. **Behaviour change.**
+
+  RFC 6764 resolution returned the first `.well-known` redirect target, a TXT path or the bare origin without checking any of them, so ik.me listed its login form and example.com its home page as both. Each candidate is now checked with the `PROPFIND` of the RFC 6764 §6 bootstrap, following the whole redirect chain, and qualifies only on a `207 Multi-Status` or a `401` carrying a challenge. `DiscoveryDavResolve` fails with the new `NotFound` error when none does, and `DiscoveryWellKnown` sends a `PROPFIND` instead of a `GET`.
 
 ## [0.7.0] - 2026-08-15
 

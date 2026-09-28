@@ -11,18 +11,12 @@
 //! runs unauthenticated by design, so the credentials it asks for are
 //! the only sign of the session. Anything else, including the HTML
 //! login page an apex domain bounces `.well-known/*` onto, resolves to
-//! `None` (no JMAP behind that origin). It reuses the generic RFC 8615
-//! probe from [`io_http`] and only adds the redirect walk, the
-//! validation and the [`DiscoveryYield`] plumbing so the std client
-//! can route each hop through the matching stream.
+//! `None` (no JMAP behind that origin). The walk itself is the shared
+//! [`DiscoveryHttpWalk`].
 
 use alloc::{string::String, vec::Vec};
 
-use io_http::{
-    coroutine::{HttpCoroutine, HttpCoroutineState, HttpYield},
-    rfc8615::well_known::{Http11WellKnown, Http11WellKnownError},
-    rfc9110::request::HttpRequest,
-};
+use io_http::{rfc8615::well_known::Http11WellKnownError, rfc9110::request::HttpRequest};
 use log::trace;
 use serde_json::Value;
 use thiserror::Error;
@@ -31,10 +25,8 @@ use url::Url;
 use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
     rfc9110::auth_schemes,
+    shared::walk::DiscoveryHttpWalk,
 };
-
-/// Redirect hops followed before giving up on a looping chain.
-const MAX_HOPS: u8 = 5;
 
 /// The capability every JMAP session advertises (RFC 8620 §2).
 const JMAP_CORE: &str = "urn:ietf:params:jmap:core";
@@ -66,29 +58,20 @@ pub struct DiscoveryJmapSessionResource {
 /// origins. Completes with the session resource, or `None` when the
 /// origin serves no JMAP.
 pub struct DiscoveryJmapWellKnown {
-    target: Url,
-    hops: u8,
-    probe: Http11WellKnown,
+    walk: DiscoveryHttpWalk,
 }
 
 impl DiscoveryJmapWellKnown {
     /// Builds a probe against `origin`, a scheme + host + port root
     /// such as `https://api.example.com/`.
     pub fn new(origin: Url) -> Self {
-        let mut target = origin;
-        target.set_path("/.well-known/jmap");
-        Self::request(target, 0)
-    }
+        let mut url = origin;
+        url.set_path("/.well-known/jmap");
 
-    /// One GET of the redirect walk, against `target`.
-    fn request(target: Url, hops: u8) -> Self {
-        let request = HttpRequest::get(target.clone()).header("Accept", "application/json");
-        let probe = Http11WellKnown::new(request);
+        let request = HttpRequest::get(url).header("Accept", "application/json");
 
         Self {
-            target,
-            hops,
-            probe,
+            walk: DiscoveryHttpWalk::new(request),
         }
     }
 }
@@ -98,59 +81,40 @@ impl DiscoveryCoroutine for DiscoveryJmapWellKnown {
     type Return = Result<Option<DiscoveryJmapSessionResource>, DiscoveryJmapWellKnownError>;
 
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
-        match self.probe.resume(arg) {
-            HttpCoroutineState::Yielded(HttpYield::WantsRead) => {
-                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead {
-                    url: self.target.clone(),
-                })
+        match self.walk.resume(arg) {
+            DiscoveryCoroutineState::Yielded(y) => DiscoveryCoroutineState::Yielded(y),
+            DiscoveryCoroutineState::Complete(Ok(None)) => {
+                trace!("well-known jmap redirect chain looped, no JMAP behind this origin");
+                DiscoveryCoroutineState::Complete(Ok(None))
             }
-            HttpCoroutineState::Yielded(HttpYield::WantsWrite(bytes)) => {
-                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite {
-                    url: self.target.clone(),
-                    bytes,
-                })
-            }
-            HttpCoroutineState::Complete(Ok(output)) => match output.redirect_url {
-                Some(next) => {
-                    if self.hops >= MAX_HOPS {
-                        trace!("well-known jmap redirected more than {MAX_HOPS} times, give up");
-                        return DiscoveryCoroutineState::Complete(Ok(None));
-                    }
+            DiscoveryCoroutineState::Complete(Ok(Some(output))) => {
+                let status = *output.response.status;
+                let auth_schemes = auth_schemes(&output.response);
 
-                    let same_origin = output.same_origin;
-                    trace!("well-known jmap redirected to {next} (same origin: {same_origin})");
-                    *self = Self::request(next, self.hops + 1);
-                    self.resume(None)
-                }
-                None => {
-                    let status = *output.response.status;
-                    let auth_schemes = auth_schemes(&output.response);
+                let session = match status {
+                    200..=299 => is_session(&output.response.body),
+                    401 => !auth_schemes.is_empty(),
+                    _ => false,
+                };
 
-                    let session = match status {
-                        200..=299 => is_session(&output.response.body),
-                        401 => !auth_schemes.is_empty(),
-                        _ => false,
-                    };
-
-                    if !session {
-                        trace!(
-                            "well-known jmap answered {status} without a session, no JMAP behind this origin"
-                        );
-                        return DiscoveryCoroutineState::Complete(Ok(None));
-                    }
-
+                if !session {
                     trace!(
-                        "well-known jmap answered {status}, session lives at {} (schemes {auth_schemes:?})",
-                        self.target
+                        "well-known jmap answered {status} without a session, no JMAP behind this origin"
                     );
-
-                    DiscoveryCoroutineState::Complete(Ok(Some(DiscoveryJmapSessionResource {
-                        url: self.target.clone(),
-                        auth_schemes,
-                    })))
+                    return DiscoveryCoroutineState::Complete(Ok(None));
                 }
-            },
-            HttpCoroutineState::Complete(Err(err)) => {
+
+                trace!(
+                    "well-known jmap answered {status}, session lives at {} (schemes {auth_schemes:?})",
+                    output.url
+                );
+
+                DiscoveryCoroutineState::Complete(Ok(Some(DiscoveryJmapSessionResource {
+                    url: output.url,
+                    auth_schemes,
+                })))
+            }
+            DiscoveryCoroutineState::Complete(Err(err)) => {
                 DiscoveryCoroutineState::Complete(Err(err.into()))
             }
         }

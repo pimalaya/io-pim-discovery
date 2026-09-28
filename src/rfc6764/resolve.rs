@@ -7,19 +7,22 @@
 //!    service (secure `_caldavs`/`_carddavs` first, plain
 //!    `_caldav`/`_carddav` next) to fix the origin host and port.
 //! 2. A TXT `path` lookup (§4) on that same SRV name: when present,
-//!    its path is joined onto the origin and returned, skipping the
-//!    `.well-known` round-trip.
-//! 3. Otherwise a `.well-known` probe (§5) on the origin, following
-//!    the context-path redirect.
+//!    its path joined onto the origin is the first candidate.
+//! 3. A `.well-known` probe (§5) on the origin, following the
+//!    context-path redirect chain.
+//! 4. The origin itself.
 //!
-//! When the domain publishes no SRV record it falls back to
-//! `https://<domain>:443/` and probes `.well-known` there.
+//! Every candidate is checked by [`DiscoveryDavContext`] and the first
+//! one leading to a DAV server wins; when none does, the resolve fails
+//! with [`DiscoveryDavResolveError::NotFound`]. When the domain
+//! publishes no SRV record the origin is `https://<domain>:443/`.
 //!
 //! Composing the DNS steps (over the `tcp://` resolver) and the HTTPS
 //! well-known step in one coroutine works because every yield carries
 //! its endpoint URL: the std client routes each step through the
 //! matching stream in its [`DiscoveryStreamPool`].
 //!
+//! [`DiscoveryDavContext`]: crate::rfc6764::context::DiscoveryDavContext
 //! [`DiscoveryStreamPool`]: crate::shared::pool::DiscoveryStreamPool
 
 use core::mem;
@@ -37,6 +40,7 @@ use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
     rfc6186::service::DiscoverySrvService,
     rfc6764::{
+        context::{DiscoveryDavContext, DiscoveryDavContextError},
         discover::{DiscoveryWebdavSrv, DiscoveryWebdavSrvError},
         service::DiscoveryDavService,
         txt::{DiscoveryWebdavTxt, DiscoveryWebdavTxtError},
@@ -56,6 +60,9 @@ pub enum DiscoveryDavResolveError {
     /// The RFC 6764 §5 `.well-known` probe failed.
     #[error(transparent)]
     DiscoveryWellKnown(#[from] DiscoveryWellKnownError),
+    /// Checking a candidate context root failed.
+    #[error(transparent)]
+    Context(#[from] DiscoveryDavContextError),
     /// The scheme + host + port assembled from SRV records did not
     /// form a valid URL.
     #[error("RFC 6764 resolve built an invalid origin URL `{0}`: {1}")]
@@ -63,6 +70,9 @@ pub enum DiscoveryDavResolveError {
     /// Joining the TXT `path` value onto the origin URL failed.
     #[error("RFC 6764 resolve could not apply TXT path `{0}`: {1}")]
     InvalidPath(String, #[source] url::ParseError),
+    /// No candidate context root led to a DAV server.
+    #[error("RFC 6764 resolve found no DAV server on `{0}`")]
+    NotFound(Url),
 }
 
 /// I/O-free `domain -> DAV context root` resolver.
@@ -169,7 +179,15 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
             },
             State::Txt { mut txt, origin } => match txt.resume(arg) {
                 DiscoveryCoroutineState::Complete(Ok(Some(path))) => match origin.join(&path) {
-                    Ok(root) => DiscoveryCoroutineState::Complete(Ok(root)),
+                    Ok(root) => {
+                        let check = DiscoveryDavContext::new(root);
+                        self.state = State::Context {
+                            check,
+                            origin,
+                            candidate: Candidate::TxtPath,
+                        };
+                        self.resume(None)
+                    }
                     Err(err) => DiscoveryCoroutineState::Complete(Err(
                         DiscoveryDavResolveError::InvalidPath(path, err),
                     )),
@@ -188,11 +206,51 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
                 }
             },
             State::DiscoveryWellKnown { mut probe, origin } => match probe.resume(arg) {
-                DiscoveryCoroutineState::Complete(Ok(url)) => {
-                    DiscoveryCoroutineState::Complete(Ok(url.unwrap_or(origin)))
+                DiscoveryCoroutineState::Complete(Ok(Some(root))) => {
+                    DiscoveryCoroutineState::Complete(Ok(root))
+                }
+                DiscoveryCoroutineState::Complete(Ok(None)) => {
+                    let check = DiscoveryDavContext::new(origin.clone());
+                    self.state = State::Context {
+                        check,
+                        origin,
+                        candidate: Candidate::Origin,
+                    };
+                    self.resume(None)
                 }
                 DiscoveryCoroutineState::Yielded(y) => {
                     self.state = State::DiscoveryWellKnown { probe, origin };
+                    DiscoveryCoroutineState::Yielded(y)
+                }
+                DiscoveryCoroutineState::Complete(Err(err)) => {
+                    DiscoveryCoroutineState::Complete(Err(err.into()))
+                }
+            },
+            State::Context {
+                mut check,
+                origin,
+                candidate,
+            } => match check.resume(arg) {
+                DiscoveryCoroutineState::Complete(Ok(Some(root))) => {
+                    DiscoveryCoroutineState::Complete(Ok(root))
+                }
+                DiscoveryCoroutineState::Complete(Ok(None)) => match candidate {
+                    Candidate::TxtPath => {
+                        debug!("skip TXT path leading to no DAV server, probe .well-known");
+                        let probe = DiscoveryWellKnown::new(origin.clone(), self.service);
+                        self.state = State::DiscoveryWellKnown { probe, origin };
+                        self.resume(None)
+                    }
+                    Candidate::Origin => DiscoveryCoroutineState::Complete(Err(
+                        DiscoveryDavResolveError::NotFound(origin),
+                    )),
+                },
+                DiscoveryCoroutineState::Yielded(y) => {
+                    self.state = State::Context {
+                        check,
+                        origin,
+                        candidate,
+                    };
                     DiscoveryCoroutineState::Yielded(y)
                 }
                 DiscoveryCoroutineState::Complete(Err(err)) => {
@@ -215,6 +273,21 @@ enum State {
         probe: DiscoveryWellKnown,
         origin: Url,
     },
+    Context {
+        check: DiscoveryDavContext,
+        origin: Url,
+        candidate: Candidate,
+    },
     #[default]
     Done,
+}
+
+/// The candidate context root a [`State::Context`] check is on, which
+/// decides what comes next when it leads to no DAV server.
+#[derive(Clone, Copy)]
+enum Candidate {
+    /// The TXT `path` joined onto the origin; `.well-known` is next.
+    TxtPath,
+    /// The origin itself, the last resort.
+    Origin,
 }

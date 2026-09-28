@@ -62,7 +62,7 @@ rustPlatform.buildRustPackage {
     ''
     + ''
       mkdir -p $out/share/{completions,man}
-      ${emulator} "$out"/bin/pim-discovery${exe} manuals "$out"/share/man
+      ${emulator} "$out"/bin/pim-discovery${exe} manuals -d "$out"/share/man
       ${emulator} "$out"/bin/pim-discovery${exe} completions -d "$out"/share/completions bash elvish fish powershell zsh
     ''
     + lib.optionalString installManPages ''

@@ -22,7 +22,8 @@ The service kinds SHALL include the providers' own APIs: `gmail` (Gmail API), `g
 
 ## MODIFIED Requirements
 
-None.
+### Requirement: Domain-organised commands
+The CLI SHALL group commands by PIM domain: `email` (IMAP, POP3, SMTP, JMAP, ManageSieve, Gmail API, Graph mail), `file` (WebDAV), `calendar` (CalDAV, JMAP, Google Calendar, Graph calendars) and `contact` (CardDAV, JMAP, Google People, Graph contacts). Each domain groups the mechanisms relevant to it; `is-google` and `is-microsoft` list the provider's fixed configs of every domain.
 
 ## REMOVED Requirements
 

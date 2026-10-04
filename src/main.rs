@@ -61,13 +61,13 @@ struct Cli {
 enum Command {
     /// Discover every service for an email address, grouped by domain.
     All(AllCommand),
-    /// Discover email services (IMAP, POP3, SMTP, JMAP).
+    /// Discover email services (IMAP, POP3, SMTP, JMAP, Gmail API, Graph).
     #[command(subcommand)]
     Email(EmailCommand),
-    /// Discover calendar services (CalDAV, JMAP).
+    /// Discover calendar services (CalDAV, JMAP, Google Calendar, Graph).
     #[command(subcommand)]
     Calendar(CalendarCommand),
-    /// Discover contact services (CardDAV, JMAP).
+    /// Discover contact services (CardDAV, JMAP, Google People, Graph).
     #[command(subcommand)]
     Contact(ContactCommand),
     /// Discover file-storage services (WebDAV).

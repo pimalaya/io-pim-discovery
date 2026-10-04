@@ -92,12 +92,20 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
         DiscoveryAuthMethod::Password,
     ];
 
-    let dav_auth = |scope: &str| {
+    let oauth = |scope: &str| {
         vec![DiscoveryAuthMethod::OauthAuthorizationCodeGrant {
             authorization_endpoint: GOOGLE_AUTHORIZATION_ENDPOINT.to_string(),
             token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
             scope: Some(scope.to_string()),
         }]
+    };
+
+    let api = |service, url: &str, scope: &str| DiscoveryServiceConfig {
+        service,
+        endpoint: DiscoveryEndpoint::Http(url.to_string()),
+        username: Some(email.to_string()),
+        auth: oauth(scope),
+        source,
     };
 
     vec![
@@ -140,7 +148,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
                 "https://apidata.googleusercontent.com/caldav/v2/{email}/user"
             )),
             username: Some(email.to_string()),
-            auth: dav_auth("https://www.googleapis.com/auth/calendar"),
+            auth: oauth("https://www.googleapis.com/auth/calendar"),
             source,
         },
         DiscoveryServiceConfig {
@@ -149,9 +157,24 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
                 "https://www.googleapis.com/carddav/v1/principals/{email}/"
             )),
             username: Some(email.to_string()),
-            auth: dav_auth("https://www.googleapis.com/auth/carddav"),
+            auth: oauth("https://www.googleapis.com/auth/carddav"),
             source,
         },
+        api(
+            DiscoveryService::Gmail,
+            "https://gmail.googleapis.com/",
+            "https://mail.google.com/",
+        ),
+        api(
+            DiscoveryService::Gcal,
+            "https://www.googleapis.com/calendar/v3/",
+            "https://www.googleapis.com/auth/calendar",
+        ),
+        api(
+            DiscoveryService::Gpeople,
+            "https://people.googleapis.com/",
+            "https://www.googleapis.com/auth/contacts",
+        ),
     ]
 }
 
@@ -160,7 +183,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
 
     // NOTE: no password: Exchange Online retired basic
     // authentication. No CalDAV/CardDAV either: Exchange exposes
-    // calendars and contacts over Graph/EWS only.
+    // calendars and contacts over Graph only.
     let auth = |scope: &str| {
         let scope = Some(format!("{scope} offline_access"));
 
@@ -176,6 +199,14 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
                 scope,
             },
         ]
+    };
+
+    let graph = |service, scope: &str| DiscoveryServiceConfig {
+        service,
+        endpoint: DiscoveryEndpoint::Http(MICROSOFT_GRAPH_URL.to_string()),
+        username: Some(email.to_string()),
+        auth: auth(scope),
+        source,
     };
 
     vec![
@@ -212,6 +243,9 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: auth("https://outlook.office.com/SMTP.Send"),
             source,
         },
+        graph(DiscoveryService::Msgraph, "Mail.ReadWrite Mail.Send"),
+        graph(DiscoveryService::MsgraphCalendar, "Calendars.ReadWrite"),
+        graph(DiscoveryService::MsgraphContacts, "Contacts.ReadWrite"),
     ]
 }
 
@@ -223,3 +257,106 @@ const MICROSOFT_AUTHORIZATION_ENDPOINT: &str =
 const MICROSOFT_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MICROSOFT_DEVICE_AUTHORIZATION_ENDPOINT: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
+const MICROSOFT_GRAPH_URL: &str = "https://graph.microsoft.com/v1.0/";
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use crate::compose::{
+        config::{DiscoveryAuthMethod, DiscoveryService, DiscoveryServiceConfig},
+        providers::DiscoveryKnownProvider,
+    };
+
+    fn services(configs: &[DiscoveryServiceConfig]) -> Vec<DiscoveryService> {
+        configs.iter().map(|config| config.service).collect()
+    }
+
+    fn scopes(config: &DiscoveryServiceConfig) -> Vec<&str> {
+        config
+            .auth
+            .iter()
+            .filter_map(|method| match method {
+                DiscoveryAuthMethod::OauthAuthorizationCodeGrant { scope, .. }
+                | DiscoveryAuthMethod::OauthDeviceAuthorizationGrant { scope, .. } => {
+                    scope.as_deref()
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn find(
+        configs: &[DiscoveryServiceConfig],
+        service: DiscoveryService,
+    ) -> &DiscoveryServiceConfig {
+        configs
+            .iter()
+            .find(|config| config.service == service)
+            .expect("service offered")
+    }
+
+    #[test]
+    fn google_offers_the_apis_next_to_the_protocols() {
+        use DiscoveryService::*;
+
+        let configs = DiscoveryKnownProvider::Google.configs("a@gmail.com");
+
+        assert_eq!(
+            services(&configs),
+            [Imap, Pop3, Smtp, Caldav, Carddav, Gmail, Gcal, Gpeople],
+        );
+
+        let gmail = find(&configs, Gmail);
+        assert_eq!(scopes(gmail), ["https://mail.google.com/"]);
+        assert_eq!(gmail.auth.len(), 1);
+
+        let gcal = find(&configs, Gcal);
+        assert_eq!(scopes(gcal), ["https://www.googleapis.com/auth/calendar"]);
+
+        let gpeople = find(&configs, Gpeople);
+        assert_eq!(
+            scopes(gpeople),
+            ["https://www.googleapis.com/auth/contacts"]
+        );
+    }
+
+    #[test]
+    fn microsoft_offers_graph_for_every_domain() {
+        use DiscoveryService::*;
+
+        let configs = DiscoveryKnownProvider::Microsoft.configs("a@outlook.com");
+
+        assert_eq!(
+            services(&configs),
+            [Imap, Pop3, Smtp, Msgraph, MsgraphCalendar, MsgraphContacts],
+        );
+
+        // Both the authorization code and the device grant, each with
+        // the refresh scope.
+        let mail = "Mail.ReadWrite Mail.Send offline_access";
+        assert_eq!(scopes(find(&configs, Msgraph)), [mail, mail]);
+
+        let calendar = "Calendars.ReadWrite offline_access";
+        assert_eq!(
+            scopes(find(&configs, MsgraphCalendar)),
+            [calendar, calendar]
+        );
+
+        let contacts = "Contacts.ReadWrite offline_access";
+        assert_eq!(
+            scopes(find(&configs, MsgraphContacts)),
+            [contacts, contacts]
+        );
+    }
+
+    #[test]
+    fn provider_apis_are_not_probed() {
+        let configs = DiscoveryKnownProvider::Microsoft.configs("a@outlook.com");
+        assert!(
+            find(&configs, DiscoveryService::Msgraph)
+                .probe_urls()
+                .is_empty()
+        );
+    }
+}

@@ -52,10 +52,22 @@ impl DiscoveryServiceConfig {
     /// schemes (to feed [`refine_auth`]): the HTTP endpoint itself,
     /// then the service's well-known path for the DAV services (some
     /// servers, fastmail among them, 404 the bare origin but guard
-    /// the well-known walk). Empty for TCP endpoints.
+    /// the well-known walk). Empty for TCP endpoints and for provider
+    /// APIs, whose fixed rules already name their OAuth grants.
     ///
     /// [`refine_auth`]: Self::refine_auth
     pub fn probe_urls(&self) -> Vec<Url> {
+        let probed = matches!(
+            self.service,
+            DiscoveryService::Jmap
+                | DiscoveryService::Caldav
+                | DiscoveryService::Carddav
+                | DiscoveryService::Webdav
+        );
+        if !probed {
+            return Vec::new();
+        }
+
         let DiscoveryEndpoint::Http(raw) = &self.endpoint else {
             return Vec::new();
         };
@@ -379,6 +391,18 @@ pub enum DiscoveryService {
     Webdav,
     /// ManageSieve server-side filtering (RFC 5804).
     Managesieve,
+    /// Gmail API mail access.
+    Gmail,
+    /// Google Calendar API calendar access.
+    Gcal,
+    /// Google People API contact access.
+    Gpeople,
+    /// Microsoft Graph mail access.
+    Msgraph,
+    /// Microsoft Graph calendar access.
+    MsgraphCalendar,
+    /// Microsoft Graph contact access.
+    MsgraphContacts,
 }
 
 /// Where to reach a service.
@@ -394,7 +418,7 @@ pub enum DiscoveryEndpoint {
         /// Transport security negotiation mode.
         security: DiscoverySecurity,
     },
-    /// HTTP endpoint (JMAP, CalDAV, CardDAV, WebDAV).
+    /// HTTP endpoint (JMAP, CalDAV, CardDAV, WebDAV, provider APIs).
     Http(String),
 }
 

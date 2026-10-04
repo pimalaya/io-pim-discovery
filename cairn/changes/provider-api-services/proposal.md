@@ -1,7 +1,7 @@
 ---
 cairn: change
 id: provider-api-services
-status: active
+status: landed
 created: 2026-10-04
 ---
 

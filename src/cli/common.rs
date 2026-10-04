@@ -32,13 +32,25 @@ pub const EMAIL: &[DiscoveryService] = &[
     DiscoveryService::Smtp,
     DiscoveryService::Jmap,
     DiscoveryService::Managesieve,
+    DiscoveryService::Gmail,
+    DiscoveryService::Msgraph,
 ];
 
 /// Services of the calendar domain (JMAP reused across domains).
-pub const CALENDAR: &[DiscoveryService] = &[DiscoveryService::Caldav, DiscoveryService::Jmap];
+pub const CALENDAR: &[DiscoveryService] = &[
+    DiscoveryService::Caldav,
+    DiscoveryService::Jmap,
+    DiscoveryService::Gcal,
+    DiscoveryService::MsgraphCalendar,
+];
 
 /// Services of the contact domain (JMAP reused across domains).
-pub const CONTACT: &[DiscoveryService] = &[DiscoveryService::Carddav, DiscoveryService::Jmap];
+pub const CONTACT: &[DiscoveryService] = &[
+    DiscoveryService::Carddav,
+    DiscoveryService::Jmap,
+    DiscoveryService::Gpeople,
+    DiscoveryService::MsgraphContacts,
+];
 
 /// Services of the file domain (generic WebDAV file storage).
 pub const FILE: &[DiscoveryService] = &[DiscoveryService::Webdav];
@@ -115,7 +127,7 @@ pub fn table(configs: &[DiscoveryServiceConfig]) -> Table {
     table
 }
 
-/// Lowercase wire name of a service.
+/// Wire name of a service.
 pub fn service_name(service: DiscoveryService) -> &'static str {
     match service {
         DiscoveryService::Imap => "imap",
@@ -126,6 +138,12 @@ pub fn service_name(service: DiscoveryService) -> &'static str {
         DiscoveryService::Carddav => "carddav",
         DiscoveryService::Webdav => "webdav",
         DiscoveryService::Managesieve => "managesieve",
+        DiscoveryService::Gmail => "gmail",
+        DiscoveryService::Gcal => "gcal",
+        DiscoveryService::Gpeople => "gpeople",
+        DiscoveryService::Msgraph => "msgraph",
+        DiscoveryService::MsgraphCalendar => "msgraphCalendar",
+        DiscoveryService::MsgraphContacts => "msgraphContacts",
     }
 }
 

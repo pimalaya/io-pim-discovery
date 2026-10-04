@@ -18,14 +18,17 @@ use crate::{
     rfc6764::service::DiscoveryDavService,
 };
 
-/// Discover email services (IMAP, POP3, SMTP, JMAP, ManageSieve).
+/// Discover email services (IMAP, POP3, SMTP, JMAP, ManageSieve, Gmail
+/// API, Microsoft Graph).
 #[derive(Debug, Subcommand)]
 pub enum EmailCommand {
     /// First mechanism, in priority order, that yields an email config.
     First(EmailArgs),
-    /// Fixed Google configs, when the address is Google-hosted.
+    /// Fixed Google configs of every domain, when the address is
+    /// Google-hosted.
     IsGoogle(EmailArgs),
-    /// Fixed Microsoft configs, when the address is Microsoft-hosted.
+    /// Fixed Microsoft configs of every domain, when the address is
+    /// Microsoft-hosted.
     IsMicrosoft(EmailArgs),
     /// Mozilla/Thunderbird autoconfig (ISP URLs, ISPDB, mailconf).
     Autoconfig(EmailArgs),
@@ -46,7 +49,8 @@ pub enum FileCommand {
     Pacc(DomainArgs),
 }
 
-/// Discover calendar services (CalDAV, JMAP) for a domain.
+/// Discover calendar services (CalDAV, JMAP, Google Calendar, Microsoft
+/// Graph) for a domain.
 #[derive(Debug, Subcommand)]
 pub enum CalendarCommand {
     /// First mechanism, in priority order, that yields a calendar config.
@@ -59,7 +63,8 @@ pub enum CalendarCommand {
     Jmap(DomainArgs),
 }
 
-/// Discover contact services (CardDAV, JMAP) for a domain.
+/// Discover contact services (CardDAV, JMAP, Google People, Microsoft
+/// Graph) for a domain.
 #[derive(Debug, Subcommand)]
 pub enum ContactCommand {
     /// First mechanism, in priority order, that yields a contact config.
@@ -102,11 +107,11 @@ impl EmailCommand {
             }
             Self::IsGoogle(args) => {
                 let client = args.server.client(tls)?;
-                only(client.is_google(&args.email), EMAIL)
+                client.is_google(&args.email)
             }
             Self::IsMicrosoft(args) => {
                 let client = args.server.client(tls)?;
-                only(client.is_microsoft(&args.email), EMAIL)
+                client.is_microsoft(&args.email)
             }
             Self::Autoconfig(args) => {
                 let client = args.server.client(tls)?;

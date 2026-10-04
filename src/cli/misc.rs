@@ -127,10 +127,26 @@ impl fmt::Display for AllOutput {
                     DiscoveryService::Smtp,
                     DiscoveryService::Jmap,
                     DiscoveryService::Managesieve,
+                    DiscoveryService::Gmail,
+                    DiscoveryService::Msgraph,
                 ],
             ),
-            ("CALENDAR", &[DiscoveryService::Caldav]),
-            ("CONTACT", &[DiscoveryService::Carddav]),
+            (
+                "CALENDAR",
+                &[
+                    DiscoveryService::Caldav,
+                    DiscoveryService::Gcal,
+                    DiscoveryService::MsgraphCalendar,
+                ],
+            ),
+            (
+                "CONTACT",
+                &[
+                    DiscoveryService::Carddav,
+                    DiscoveryService::Gpeople,
+                    DiscoveryService::MsgraphContacts,
+                ],
+            ),
             ("FILE", &[DiscoveryService::Webdav]),
         ];
 

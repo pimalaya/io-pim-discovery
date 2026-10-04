@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the Gmail API, Google Calendar, Google People and Microsoft Graph service kinds.
+
+  The Google and Microsoft provider rules offer them next to the protocols, so a Microsoft address now has calendars and contacts.
+
+### Changed
+
+- Changed `email is-google` and `email is-microsoft` to list the provider configs of every domain.
+
 ## [0.8.0] - 2026-09-28
 
 ### Added

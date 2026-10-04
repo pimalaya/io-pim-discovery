@@ -1,7 +1,7 @@
 ---
 cairn: change
 id: consistent-json
-status: active
+status: landed
 created: 2026-10-04
 ---
 

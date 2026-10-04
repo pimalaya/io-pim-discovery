@@ -27,8 +27,14 @@ use crate::rfc6186::service::{DiscoverySrvReport, DiscoverySrvService};
 
 /// One discovered way to use one service: where to connect, how to
 /// authenticate, and which mechanism found it.
+///
+/// It serializes with its `source` as a string and, when a fixed rule
+/// matched, the provider in a `provider` field of its own.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    into = "DiscoveryServiceConfigWire",
+    try_from = "DiscoveryServiceConfigWire"
+)]
 pub struct DiscoveryServiceConfig {
     /// The service this config describes.
     pub service: DiscoveryService,
@@ -477,9 +483,14 @@ impl DiscoveryEndpoint {
 mod tests {
     use alloc::{string::ToString, vec};
 
-    use crate::compose::config::{
-        DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoverySecurity,
-        DiscoveryService, DiscoveryServiceConfig,
+    use serde_json::{Value, from_value, to_value};
+
+    use crate::compose::{
+        config::{
+            DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoverySecurity,
+            DiscoveryService, DiscoveryServiceConfig,
+        },
+        providers::DiscoveryKnownProvider,
     };
 
     #[cfg(feature = "rfc6186")]
@@ -578,6 +589,56 @@ mod tests {
     }
 
     #[test]
+    fn json_names_the_source_and_the_provider_apart() {
+        let provider = DiscoveryKnownProvider::Google
+            .configs("a@gmail.com")
+            .remove(0);
+        let autoconfig = DiscoveryServiceConfig {
+            service: DiscoveryService::Imap,
+            endpoint: DiscoveryEndpoint::Tcp {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: DiscoverySecurity::Tls,
+            },
+            username: Some("a@example.com".to_string()),
+            auth: vec![DiscoveryAuthMethod::OauthDeviceAuthorizationGrant {
+                device_authorization_endpoint: "https://example.com/device".to_string(),
+                token_endpoint: "https://example.com/token".to_string(),
+                scope: None,
+            }],
+            source: DiscoveryConfigSource::IspMain,
+        };
+
+        let provider_json = to_value(&provider).unwrap();
+        assert_eq!(provider_json["source"], "provider");
+        assert_eq!(provider_json["provider"], "google");
+
+        let autoconfig_json = to_value(&autoconfig).unwrap();
+        assert_eq!(autoconfig_json["source"], "ispMain");
+        assert!(autoconfig_json.get("provider").is_none());
+
+        no_snake_case_key(&provider_json);
+        no_snake_case_key(&autoconfig_json);
+
+        let back: DiscoveryServiceConfig = from_value(provider_json).unwrap();
+        assert_eq!(back.source, provider.source);
+        assert_eq!(back.auth, provider.auth);
+    }
+
+    fn no_snake_case_key(value: &Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    assert!(!key.contains('_'), "snake_case key `{key}`");
+                    no_snake_case_key(value);
+                }
+            }
+            Value::Array(values) => values.iter().for_each(no_snake_case_key),
+            _ => (),
+        }
+    }
+
+    #[test]
     fn http_endpoints_compare_normalized() {
         let bare = DiscoveryEndpoint::Http("https://carddav.example.com".to_string());
         let slash = DiscoveryEndpoint::Http("https://carddav.example.com/".to_string());
@@ -617,7 +678,7 @@ pub enum DiscoverySecurity {
 
 /// How a client can authenticate against a service.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DiscoveryAuthMethod {
     /// Username and password login (possibly an app password).
     Password,
@@ -673,6 +734,88 @@ pub enum DiscoveryConfigSource {
     Dav,
     /// RFC 8620 JMAP resolve.
     Jmap,
+}
+
+/// The serialized shape of a [`DiscoveryServiceConfig`].
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscoveryServiceConfigWire {
+    service: DiscoveryService,
+    endpoint: DiscoveryEndpoint,
+    username: Option<String>,
+    auth: Vec<DiscoveryAuthMethod>,
+    source: DiscoveryConfigSourceWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<DiscoveryKnownProvider>,
+}
+
+/// The serialized [`DiscoveryConfigSource`], the provider left out.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum DiscoveryConfigSourceWire {
+    Provider,
+    Pacc,
+    IspMain,
+    IspFallback,
+    Mailconf,
+    Ispdb,
+    Srv,
+    Dav,
+    Jmap,
+}
+
+impl From<DiscoveryServiceConfig> for DiscoveryServiceConfigWire {
+    fn from(config: DiscoveryServiceConfig) -> Self {
+        let (source, provider) = match config.source {
+            DiscoveryConfigSource::Provider(p) => (DiscoveryConfigSourceWire::Provider, Some(p)),
+            DiscoveryConfigSource::Pacc => (DiscoveryConfigSourceWire::Pacc, None),
+            DiscoveryConfigSource::IspMain => (DiscoveryConfigSourceWire::IspMain, None),
+            DiscoveryConfigSource::IspFallback => (DiscoveryConfigSourceWire::IspFallback, None),
+            DiscoveryConfigSource::Mailconf => (DiscoveryConfigSourceWire::Mailconf, None),
+            DiscoveryConfigSource::Ispdb => (DiscoveryConfigSourceWire::Ispdb, None),
+            DiscoveryConfigSource::Srv => (DiscoveryConfigSourceWire::Srv, None),
+            DiscoveryConfigSource::Dav => (DiscoveryConfigSourceWire::Dav, None),
+            DiscoveryConfigSource::Jmap => (DiscoveryConfigSourceWire::Jmap, None),
+        };
+
+        Self {
+            service: config.service,
+            endpoint: config.endpoint,
+            username: config.username,
+            auth: config.auth,
+            source,
+            provider,
+        }
+    }
+}
+
+impl TryFrom<DiscoveryServiceConfigWire> for DiscoveryServiceConfig {
+    type Error = &'static str;
+
+    fn try_from(wire: DiscoveryServiceConfigWire) -> Result<Self, Self::Error> {
+        let source = match wire.source {
+            DiscoveryConfigSourceWire::Provider => match wire.provider {
+                Some(provider) => DiscoveryConfigSource::Provider(provider),
+                None => return Err("Provider source without a provider field"),
+            },
+            DiscoveryConfigSourceWire::Pacc => DiscoveryConfigSource::Pacc,
+            DiscoveryConfigSourceWire::IspMain => DiscoveryConfigSource::IspMain,
+            DiscoveryConfigSourceWire::IspFallback => DiscoveryConfigSource::IspFallback,
+            DiscoveryConfigSourceWire::Mailconf => DiscoveryConfigSource::Mailconf,
+            DiscoveryConfigSourceWire::Ispdb => DiscoveryConfigSource::Ispdb,
+            DiscoveryConfigSourceWire::Srv => DiscoveryConfigSource::Srv,
+            DiscoveryConfigSourceWire::Dav => DiscoveryConfigSource::Dav,
+            DiscoveryConfigSourceWire::Jmap => DiscoveryConfigSource::Jmap,
+        };
+
+        Ok(Self {
+            service: wire.service,
+            endpoint: wire.endpoint,
+            username: wire.username,
+            auth: wire.auth,
+            source,
+        })
+    }
 }
 
 /// Substitutes the Mozilla autoconfig placeholders (%EMAILADDRESS%,

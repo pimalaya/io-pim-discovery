@@ -12,7 +12,7 @@ The `compose` module reduces the individual mechanisms into a single ranked list
 Composition SHALL reduce the fixed-provider rules first: when the email domain (or its MX records) matches a known provider (Google, Microsoft), the provider's own configs are produced and tag their source as `Provider`. Provider detection is exposed on its own (`provider`, `is_google`, `is_microsoft`).
 
 ### Requirement: Ordered mechanism fan-out
-For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested, and merge their configs into one ranked list.
+For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested. `compose_raw`, and the CLI that prints it, SHALL concatenate their configs into one list in that order without deduplicating: each stays the answer of one source, and an endpoint named by several sources appears once per source, merging being the consumer's. `compose_all` and `compose_first` SHALL merge them into one ranked list for callers wanting a single answer (a setup wizard).
 
 ### Requirement: Composition entry points
 The client SHALL expose `compose_all` (every reachable config), `compose_first` (the first mechanism, in priority order, that yields one), and `compose_raw` (per-mechanism output without merging). Each mechanism is also reachable directly (`autoconfig`, `srv`, `pacc`, `dav`, `jmap`, `auth`, `oauth_server`, `oauth_resource`).
@@ -43,3 +43,11 @@ The client SHALL offer a secure-only mode (`--secure-only` on the CLI), off by d
 - GIVEN a domain serving its autoconfig over `http://` only
 - WHEN discovery runs with `--secure-only`
 - THEN no request is made to the `http://` URL and no config comes from it
+
+### Requirement: One JSON shape
+Every config SHALL serialize with camelCase keys, its `source` as a string naming the mechanism that produced it, and, when a fixed provider rule matched, a `provider` field naming the provider.
+
+#### Scenario: A provider config and an autoconfig one read alike
+- GIVEN a Google address and a domain with an autoconfig document
+- WHEN `pim-discovery --json all` runs on each
+- THEN both print `source` as a string, the Google one with `provider: "google"`, and no key holds an underscore

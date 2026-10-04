@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Changed `email is-google` and `email is-microsoft` to list the provider configs of every domain.
 
+- Changed the JSON of a service config. **Breaking.**
+
+  `source` is always a string, a fixed rule's provider moves to a `provider` field, and the OAuth method fields are camelCase.
+
 ## [0.8.0] - 2026-09-28
 
 ### Added

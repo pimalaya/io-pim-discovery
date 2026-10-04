@@ -102,31 +102,31 @@ impl EmailCommand {
     pub fn execute(self, printer: &mut impl Printer, tls: &Tls) -> Result<()> {
         let configs = match self {
             Self::First(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 first_email(&client, &args.email)
             }
             Self::IsGoogle(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 client.is_google(&args.email)
             }
             Self::IsMicrosoft(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 client.is_microsoft(&args.email)
             }
             Self::Autoconfig(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 only(client.autoconfig(&args.email), EMAIL)
             }
             Self::Srv(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 only(client.srv(&args.email), EMAIL)
             }
             Self::Pacc(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 only(client.pacc(&args.email), EMAIL)
             }
             Self::Jmap(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.email)?;
                 only(client.jmap(&args.email), EMAIL)
             }
         };
@@ -142,7 +142,7 @@ impl FileCommand {
             // PACC is the only mechanism advertising WebDAV, so `first`
             // and `pacc` coincide for now.
             Self::First(args) | Self::Pacc(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(client.pacc(&args.domain), FILE)
             }
         };
@@ -156,22 +156,22 @@ impl CalendarCommand {
     pub fn execute(self, printer: &mut impl Printer, tls: &Tls) -> Result<()> {
         let configs = match self {
             Self::First(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 first_dav(&client, &args.domain, DiscoveryDavService::Caldav, CALENDAR)
             }
             Self::Dav(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(
                     client.dav(&args.domain, DiscoveryDavService::Caldav),
                     CALENDAR,
                 )
             }
             Self::Pacc(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(client.pacc(&args.domain), CALENDAR)
             }
             Self::Jmap(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(client.jmap(&args.domain), CALENDAR)
             }
         };
@@ -185,22 +185,22 @@ impl ContactCommand {
     pub fn execute(self, printer: &mut impl Printer, tls: &Tls) -> Result<()> {
         let configs = match self {
             Self::First(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 first_dav(&client, &args.domain, DiscoveryDavService::Carddav, CONTACT)
             }
             Self::Dav(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(
                     client.dav(&args.domain, DiscoveryDavService::Carddav),
                     CONTACT,
                 )
             }
             Self::Pacc(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(client.pacc(&args.domain), CONTACT)
             }
             Self::Jmap(args) => {
-                let client = args.server.client(tls)?;
+                let client = args.server.checked_client(tls, &args.domain)?;
                 only(client.jmap(&args.domain), CONTACT)
             }
         };

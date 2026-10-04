@@ -398,6 +398,140 @@ impl DiscoveryCoroutine for DiscoveryDnsTxt {
     }
 }
 
+/// Errors that can occur while probing the resolver.
+#[derive(Debug, Error)]
+pub enum DiscoveryDnsProbeError {
+    /// The probed domain is not a valid DNS name.
+    #[error("DNS probe domain `{1}` is not a valid name")]
+    InvalidDomain(#[source] NameParseError, String),
+    /// The built query did not fit in the fixed query buffer.
+    #[error("DNS probe query did not fit in the {DNS_QUERY_BUF_SIZE}-byte buffer")]
+    QueryTooLarge(#[source] MessageBuildError),
+    /// The answer is too short to carry a DNS header.
+    #[error("DNS resolver answered {0} bytes, too short for a DNS message")]
+    InvalidResponse(usize),
+    /// No answer came back (connection refused or closed early).
+    #[error("DNS resolver did not answer")]
+    Eof,
+    /// The underlying DNS message exchange failed.
+    #[error(transparent)]
+    Exchange(DiscoveryDnsExchangeError),
+}
+
+/// The RFC 1035 §4.1.1 response code of a DNS answer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiscoveryDnsRcode(pub u8);
+
+impl DiscoveryDnsRcode {
+    /// Whether the resolver did its job: `NOERROR`, or `NXDOMAIN` (the
+    /// name does not exist, which is an answer too).
+    pub fn is_answer(self) -> bool {
+        matches!(self.0, 0 | 3)
+    }
+
+    /// The code's RFC 1035 / RFC 2136 name, or its number.
+    pub fn name(self) -> String {
+        use alloc::format;
+
+        match self.0 {
+            0 => "NOERROR".into(),
+            1 => "FORMERR".into(),
+            2 => "SERVFAIL".into(),
+            3 => "NXDOMAIN".into(),
+            4 => "NOTIMP".into(),
+            5 => "REFUSED".into(),
+            code => format!("RCODE {code}"),
+        }
+    }
+}
+
+/// I/O-free coroutine asking the resolver one SOA question about
+/// `domain`, only to learn whether it answers: completes with the
+/// answer's response code, whatever the records.
+#[derive(Debug)]
+pub struct DiscoveryDnsProbe {
+    domain: String,
+    resolver: Url,
+    exchange: Option<DiscoveryDnsExchange>,
+}
+
+impl DiscoveryDnsProbe {
+    /// Returns a probe of `domain` against `resolver` (a
+    /// `tcp://host:port` resolver or an RFC 8484 one).
+    pub fn new(domain: impl ToString, resolver: Url) -> Self {
+        Self {
+            domain: domain.to_string(),
+            resolver,
+            exchange: None,
+        }
+    }
+
+    fn query(&self) -> Result<Vec<u8>, DiscoveryDnsProbeError> {
+        let qname = absolute_name(&self.domain)
+            .parse::<RevNameBuf>()
+            .map_err(|err| DiscoveryDnsProbeError::InvalidDomain(err, self.domain.clone()))?;
+
+        let mut buf = vec![0u8; DNS_QUERY_BUF_SIZE];
+        let mut compressor = NameCompressor::default();
+        let mut builder = MessageBuilder::new(
+            &mut buf,
+            &mut compressor,
+            U16::new(1),
+            *HeaderFlags::default().set_rd(true),
+        );
+
+        let q = Question {
+            qname,
+            qtype: QType::SOA,
+            qclass: QClass::IN,
+        };
+
+        builder
+            .push_question(&q)
+            .map_err(DiscoveryDnsProbeError::QueryTooLarge)?;
+
+        Ok(builder.finish().as_bytes().to_vec())
+    }
+}
+
+impl DiscoveryCoroutine for DiscoveryDnsProbe {
+    type Yield = DiscoveryYield;
+    type Return = Result<DiscoveryDnsRcode, DiscoveryDnsProbeError>;
+
+    fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
+        let mut exchange = match self.exchange.take() {
+            Some(exchange) => exchange,
+            None => match self.query() {
+                Ok(message) => DiscoveryDnsExchange::new(message, self.resolver.clone()),
+                Err(err) => return DiscoveryCoroutineState::Complete(Err(err)),
+            },
+        };
+
+        match exchange.resume(arg) {
+            DiscoveryCoroutineState::Yielded(y) => {
+                self.exchange = Some(exchange);
+                DiscoveryCoroutineState::Yielded(y)
+            }
+            DiscoveryCoroutineState::Complete(Err(DiscoveryDnsExchangeError::Eof)) => {
+                DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::Eof))
+            }
+            DiscoveryCoroutineState::Complete(Err(err)) => {
+                DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::Exchange(err)))
+            }
+            // NOTE: the response code is the low nibble of the fourth
+            // header byte (RFC 1035 §4.1.1).
+            DiscoveryCoroutineState::Complete(Ok(response)) if response.len() < 12 => {
+                DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::InvalidResponse(
+                    response.len(),
+                )))
+            }
+            DiscoveryCoroutineState::Complete(Ok(response)) => {
+                DiscoveryCoroutineState::Complete(Ok(DiscoveryDnsRcode(response[3] & 0x0F)))
+            }
+        }
+    }
+}
+
 /// Best-effort system DNS resolver as a `tcp://<ip>:53` URL, read from
 /// `/etc/resolv.conf` on unix and from the network adapters on windows.
 /// Returns `None` when no nameserver can be determined; callers fall
@@ -498,5 +632,42 @@ mod tests {
             "{request}"
         );
         assert!(request.contains("content-length: 5"), "{request}");
+    }
+
+    #[test]
+    fn probe_reads_the_response_code() {
+        let resolver: Url = "tcp://1.1.1.1:53".parse().unwrap();
+        let answer = |rcode: u8| {
+            let mut probe = DiscoveryDnsProbe::new("example.org", resolver.clone());
+            match probe.resume(None) {
+                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite { bytes, .. }) => {
+                    assert_eq!(bytes[2 + 13..2 + 13 + 7], *b"example", "qname");
+                }
+                state => panic!("expected WantsWrite, got {state:?}"),
+            }
+            assert!(matches!(
+                probe.resume(None),
+                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead { .. })
+            ));
+            let header = [0u8, 1, 0x81, 0x80 | rcode, 0, 1, 0, 0, 0, 0, 0, 0];
+            let reply = [&[0u8, 12][..], &header[..]].concat();
+            match probe.resume(Some(&reply)) {
+                DiscoveryCoroutineState::Complete(result) => result,
+                state => panic!("expected Complete, got {state:?}"),
+            }
+        };
+
+        assert!(answer(0).unwrap().is_answer());
+        assert!(answer(3).unwrap().is_answer(), "NXDOMAIN is an answer");
+        assert_eq!(answer(2).unwrap().name(), "SERVFAIL");
+        assert!(!answer(5).unwrap().is_answer());
+
+        let mut probe = DiscoveryDnsProbe::new("example.org", resolver);
+        probe.resume(None);
+        probe.resume(None);
+        assert!(matches!(
+            probe.resume(Some(&[])),
+            DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::Eof))
+        ));
     }
 }

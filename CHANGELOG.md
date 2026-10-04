@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Changed a DNS resolver that does not answer into an error. **Breaking.**
+
+  Discovery first asks the resolver about the address's domain (`check_resolver`, run by every `compose_*` and every CLI command). No answer, or a failing response code (`SERVFAIL`, `REFUSED`, an HTTP error from a DNS-over-HTTPS resolver), is now an error naming the resolver, where it gave an empty or partial list with exit 0. `NXDOMAIN` is still an answer.
+
+- Changed secure-only mode to refuse a plain `http://` DNS resolver, with an error, before any request.
+
 ## [0.9.0] - 2026-10-04
 
 ### Added

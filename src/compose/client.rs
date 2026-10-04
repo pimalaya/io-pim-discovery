@@ -30,6 +30,7 @@ use std::{
 use alloc::collections::BTreeMap;
 use alloc::{
     collections::BTreeSet,
+    format,
     string::{String, ToString},
     vec::Vec,
 };
@@ -66,7 +67,7 @@ use crate::{
         providers::DiscoveryKnownProvider,
     },
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
-    shared::pool::DiscoveryStreamPool,
+    shared::{dns::DiscoveryDnsProbe, pool::DiscoveryStreamPool},
 };
 
 const READ_BUFFER_SIZE: usize = 8 * 1024;
@@ -77,6 +78,13 @@ pub enum DiscoveryComposeClientStdError {
     /// The input is not a valid `local@domain` email address.
     #[error("Email address `{0}` is missing the `@` separator")]
     InvalidEmail(String),
+    /// Secure-only mode refuses a resolver reached over plain HTTP.
+    #[error("DNS resolver `{0}` is plain HTTP, refused in secure-only mode")]
+    PlainResolver(Url),
+    /// The resolver did not answer, or answered with a failure: every
+    /// DNS-backed mechanism would come back empty.
+    #[error("DNS resolver `{resolver}` cannot be used: {reason}")]
+    Resolver { resolver: Url, reason: String },
 }
 
 /// Std-blocking parallel compose orchestrator.
@@ -137,6 +145,33 @@ impl DiscoveryComposeClientStd {
     pub fn with_secure_only(mut self, secure_only: bool) -> Self {
         self.secure_only = secure_only;
         self
+    }
+
+    /// Checks that the resolver answers before anything relies on it:
+    /// one SOA question about the domain of `input` (an address or a
+    /// bare domain). `NOERROR` and `NXDOMAIN` are answers; no answer or
+    /// any other response code is an error naming the resolver, as is a
+    /// plain `http://` resolver in secure-only mode. Every `compose_*`
+    /// entry point runs it first; callers of the single mechanisms run
+    /// it themselves.
+    pub fn check_resolver(&self, input: &str) -> Result<(), DiscoveryComposeClientStdError> {
+        if self.secure_only && self.dns.scheme() == "http" {
+            return Err(DiscoveryComposeClientStdError::PlainResolver(
+                self.dns.clone(),
+            ));
+        }
+
+        let failed = |reason: String| DiscoveryComposeClientStdError::Resolver {
+            resolver: self.dns.clone(),
+            reason,
+        };
+
+        let probe = DiscoveryDnsProbe::new(domain_part(input), self.dns.clone());
+        match run(&mut self.pool(), probe) {
+            Ok(rcode) if rcode.is_answer() => Ok(()),
+            Ok(rcode) => Err(failed(format!("answered {}", rcode.name()))),
+            Err(err) => Err(failed(err.to_string())),
+        }
     }
 
     /// Runs every mechanism in parallel and returns all configs found
@@ -363,6 +398,7 @@ impl DiscoveryComposeClientStd {
             domain,
             mechanisms,
         } = self.plan(email, services)?;
+        self.check_resolver(&domain)?;
 
         // Mechanism outputs, in priority order. The fixed provider
         // domain rule is pure and comes first (see `plan`).
@@ -405,6 +441,26 @@ impl DiscoveryComposeClientStd {
             domain,
             mechanisms,
         } = self.plan(email, services)?;
+
+        // The resolver probe counts against the same deadline: one that
+        // has not answered by then is a failure, and the mechanisms get
+        // what is left.
+        let started = Instant::now();
+        let probe = {
+            let client = self.clone_shallow();
+            let domain = domain.clone();
+            move || client.check_resolver(&domain)
+        };
+        match collect_within(vec![probe], deadline).pop().flatten() {
+            Some(checked) => checked?,
+            None => {
+                return Err(DiscoveryComposeClientStdError::Resolver {
+                    resolver: self.dns.clone(),
+                    reason: format!("no answer within {deadline:?}"),
+                });
+            }
+        }
+        let deadline = deadline.saturating_sub(started.elapsed());
 
         let mut outputs: Vec<Vec<DiscoveryServiceConfig>> = Vec::new();
         outputs.extend(provider_output);
@@ -1071,6 +1127,49 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local port nothing listens on: connections are refused at once.
+    fn closed_resolver() -> Url {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        format!("tcp://127.0.0.1:{port}").parse().unwrap()
+    }
+
+    #[test]
+    fn an_unreachable_resolver_is_an_error_not_an_empty_list() {
+        let client = DiscoveryComposeClientStd::new(closed_resolver(), Tls::default());
+
+        // Even a fixed-provider address: a partial answer would hide the failure.
+        for email in ["vous@gmail.com", "contact@example.org"] {
+            let err = client.compose_raw(email, BTreeSet::new()).unwrap_err();
+            assert!(
+                matches!(err, DiscoveryComposeClientStdError::Resolver { .. }),
+                "{err}"
+            );
+        }
+        let err = client
+            .compose_all_within(
+                "contact@example.org",
+                BTreeSet::new(),
+                Duration::from_secs(30),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("did not answer"), "{err}");
+    }
+
+    #[test]
+    fn secure_only_refuses_a_plain_http_resolver() {
+        let resolver: Url = "http://127.0.0.1:9/dns-query".parse().unwrap();
+        let client =
+            DiscoveryComposeClientStd::new(resolver, Tls::default()).with_secure_only(true);
+
+        let err = client.check_resolver("contact@example.org").unwrap_err();
+        assert!(
+            matches!(err, DiscoveryComposeClientStdError::PlainResolver(_)),
+            "{err}"
+        );
+    }
 
     #[test]
     fn collect_within_preserves_input_order_when_all_finish() {

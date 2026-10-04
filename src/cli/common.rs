@@ -64,8 +64,8 @@ pub struct ServerArg {
     #[arg(long, default_value = DNS_SERVER)]
     pub server: String,
     /// Refuse plain HTTP requests and unencrypted endpoints (STARTTLS
-    /// kept). DNS lookups still go to the resolver, plain unless it is
-    /// an RFC 8484 one.
+    /// kept). DNS lookups still go to the resolver, over TCP or RFC 8484
+    /// HTTPS; a plain `http://` resolver is refused.
     #[arg(long)]
     pub secure_only: bool,
 }
@@ -77,6 +77,15 @@ impl ServerArg {
         let dns = resolver_url(&self.server)?;
         let client = DiscoveryComposeClientStd::new(dns, tls.clone());
         Ok(client.with_secure_only(self.secure_only))
+    }
+
+    /// Same as [`client`](Self::client), then checks that the resolver
+    /// answers for the domain of `input` (an address or a domain), so
+    /// a resolver failure is an error rather than an empty list.
+    pub fn checked_client(&self, tls: &Tls, input: &str) -> Result<DiscoveryComposeClientStd> {
+        let client = self.client(tls)?;
+        client.check_resolver(input)?;
+        Ok(client)
     }
 }
 

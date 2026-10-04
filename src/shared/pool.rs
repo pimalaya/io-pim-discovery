@@ -150,6 +150,13 @@ impl DiscoveryStreamPool {
         })
     }
 
+    /// Unregisters the factory for `scheme`, so that no stream opens
+    /// for it (a secure-only pool drops `http`).
+    pub fn without_factory(mut self, scheme: &str) -> Self {
+        self.factories.remove(scheme);
+        self
+    }
+
     /// Pre-feeds a stream for one specific URL. Bypasses the scheme
     /// factory for that URL.
     pub fn insert(&mut self, url: &Url, stream: impl DiscoveryStream + 'static) {
@@ -179,5 +186,28 @@ impl DiscoveryStreamPool {
         }
 
         Ok(self.streams.get_mut(&key).unwrap().as_mut())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::TcpStream, string::ToString};
+
+    use anyhow::{Result, bail};
+    use url::Url;
+
+    use crate::shared::pool::DiscoveryStreamPool;
+
+    #[test]
+    fn unregistered_scheme_opens_no_stream() {
+        let refuse = |_: &Url| -> Result<TcpStream> { bail!("factory reached") };
+        let mut pool = DiscoveryStreamPool::new()
+            .with_factory("http", refuse)
+            .without_factory("http");
+
+        let url = Url::parse("http://example.com/").unwrap();
+        let err = pool.get(&url).err().unwrap();
+
+        assert!(err.to_string().starts_with("No stream factory"));
     }
 }

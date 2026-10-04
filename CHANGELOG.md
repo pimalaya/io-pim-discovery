@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The Google and Microsoft provider rules offer them next to the protocols, so a Microsoft address now has calendars and contacts.
 
+- Added a secure-only mode, `with_secure_only` on the compose client and `--secure-only` on the CLI.
+
+  It makes no plain HTTP request, builds no `http://` CalDAV/CardDAV origin and drops unencrypted endpoints, keeping STARTTLS.
+
 ### Changed
 
 - Changed `email is-google` and `email is-microsoft` to list the provider configs of every domain.

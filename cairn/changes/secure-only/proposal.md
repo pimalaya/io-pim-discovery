@@ -1,7 +1,7 @@
 ---
 cairn: change
 id: secure-only
-status: active
+status: landed
 created: 2026-10-04
 ---
 
@@ -25,6 +25,8 @@ Discovery decides where a user's credentials go. A production client (MOA) requi
   - a config whose endpoint is `plain` or `http://` is dropped. STARTTLS stays: it is TLS, required by the consumer once offered (no fallback to plain).
 - **DNS** is out of this change's reach: the SRV and TXT lookups go to the configured resolver. A caller wanting more than plain UDP passes an RFC 8484 resolver (`--server https://…`), already supported.
 
-## Open question
+## Open question, settled
 
 - Should `--secure-only` also refuse a plain `host:port` resolver, making DNS over HTTPS the only choice in that mode? It protects the lookups' transport, not their authenticity (no DNSSEC).
+
+  Settled 2026-10-04: no. DNS over HTTPS only moves the trust from the network to the resolver, without DNSSEC an answer is no more authentic, and refusing the default resolver would make the flag fail out of the box. A caller wanting it passes `--server https://…`; the flag's help says the lookups stay on the resolver.

@@ -55,23 +55,28 @@ pub const CONTACT: &[DiscoveryService] = &[
 /// Services of the file domain (generic WebDAV file storage).
 pub const FILE: &[DiscoveryService] = &[DiscoveryService::Webdav];
 
-/// DNS resolver flag shared by every discovery command.
+/// Network flags shared by every discovery command: the DNS resolver
+/// and the secure-only mode.
 #[derive(Debug, Args)]
 pub struct ServerArg {
     /// DNS resolver: `host:port`, or an RFC 8484 resolver URL such as
     /// `https://cloudflare-dns.com/dns-query`.
     #[arg(long, default_value = DNS_SERVER)]
     pub server: String,
+    /// Refuse plain HTTP requests and unencrypted endpoints (STARTTLS
+    /// kept). DNS lookups still go to the resolver, plain unless it is
+    /// an RFC 8484 one.
+    #[arg(long)]
+    pub secure_only: bool,
 }
 
 impl ServerArg {
     /// Builds a compose client resolving DNS through the flag and
     /// running the HTTPS mechanisms over `tls`.
     pub fn client(&self, tls: &Tls) -> Result<DiscoveryComposeClientStd> {
-        Ok(DiscoveryComposeClientStd::new(
-            resolver_url(&self.server)?,
-            tls.clone(),
-        ))
+        let dns = resolver_url(&self.server)?;
+        let client = DiscoveryComposeClientStd::new(dns, tls.clone());
+        Ok(client.with_secure_only(self.secure_only))
     }
 }
 

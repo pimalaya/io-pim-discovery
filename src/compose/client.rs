@@ -83,6 +83,7 @@ pub enum DiscoveryComposeClientStdError {
 pub struct DiscoveryComposeClientStd {
     dns: Url,
     tls: Tls,
+    secure_only: bool,
 }
 
 /// A single discovery mechanism the fan-out can run, dispatched by
@@ -120,7 +121,22 @@ impl DiscoveryComposeClientStd {
     /// `tcp://host:port` URL pointing at a DNS-over-TCP resolver) and
     /// runs the HTTPS-bound mechanisms over `tls`.
     pub fn new(dns: Url, tls: Tls) -> Self {
-        Self { dns, tls }
+        Self {
+            dns,
+            tls,
+            secure_only: false,
+        }
+    }
+
+    /// Refuses plain transports when `secure_only` is set: no request
+    /// goes over plain HTTP (a mailconf target or a redirect to
+    /// `http://` included), RFC 6764 builds no `http://` origin, and
+    /// configs whose endpoint is `plain` or `http://` are dropped.
+    /// STARTTLS endpoints are kept. DNS lookups still go to the
+    /// configured resolver.
+    pub fn with_secure_only(mut self, secure_only: bool) -> Self {
+        self.secure_only = secure_only;
+        self
     }
 
     /// Runs every mechanism in parallel and returns all configs found
@@ -517,6 +533,7 @@ impl DiscoveryComposeClientStd {
         Self {
             dns: self.dns.clone(),
             tls: self.tls.clone(),
+            secure_only: self.secure_only,
         }
     }
 
@@ -620,9 +637,32 @@ impl DiscoveryComposeClientStd {
 
     /// A fresh stream pool for one mechanism thread: the default
     /// `tcp` factory for DNS lookups, plus `http`/`https` factories
-    /// backed by the client's TLS.
+    /// backed by the client's TLS, without `http` when secure-only.
     fn pool(&self) -> DiscoveryStreamPool {
-        DiscoveryStreamPool::new().with_http_factories(self.tls.clone())
+        let pool = DiscoveryStreamPool::new().with_http_factories(self.tls.clone());
+
+        if self.secure_only {
+            pool.without_factory("http")
+        } else {
+            pool
+        }
+    }
+
+    /// Drops the configs whose endpoint is unencrypted when
+    /// secure-only.
+    fn keep_secure(&self, mut configs: Vec<DiscoveryServiceConfig>) -> Vec<DiscoveryServiceConfig> {
+        if self.secure_only {
+            configs.retain(|config| {
+                let secure = config.is_secure();
+                if !secure {
+                    debug!("drop unencrypted endpoint");
+                    trace!("{:?}", config.endpoint);
+                }
+                secure
+            });
+        }
+
+        configs
     }
 
     /// Probes each config's endpoints for their advertised
@@ -744,7 +784,7 @@ impl DiscoveryComposeClientStd {
         };
 
         match run(&mut self.pool(), pacc) {
-            Ok(config) => DiscoveryServiceConfig::from_pacc(&config),
+            Ok(config) => self.keep_secure(DiscoveryServiceConfig::from_pacc(&config)),
             Err(err) => {
                 debug!("skip PACC discovery");
                 trace!("{err:?}");
@@ -800,6 +840,11 @@ impl DiscoveryComposeClientStd {
         let mailconf = DiscoveryMailconf::new(domain, self.dns.clone());
 
         match run(&mut self.pool(), mailconf) {
+            Ok(url) if self.secure_only && url.scheme() != "https" => {
+                debug!("skip plain mailconf TXT redirect");
+                trace!("{url}");
+                Vec::new()
+            }
             Ok(url) => {
                 debug!("follow mailconf TXT redirect");
                 trace!("{url}");
@@ -821,7 +866,9 @@ impl DiscoveryComposeClientStd {
         source: DiscoveryConfigSource,
     ) -> Vec<DiscoveryServiceConfig> {
         match run(&mut self.pool(), DiscoveryIsp::new(url)) {
-            Ok(config) => DiscoveryServiceConfig::from_autoconfig(&config, email, source),
+            Ok(config) => self.keep_secure(DiscoveryServiceConfig::from_autoconfig(
+                &config, email, source,
+            )),
             Err(err) => {
                 debug!("skip autoconfig document");
                 trace!("{err:?}");
@@ -878,7 +925,8 @@ impl DiscoveryComposeClientStd {
 
     #[cfg(feature = "rfc6764")]
     fn run_dav(&self, domain: &str, service: DiscoveryDavService) -> Vec<DiscoveryServiceConfig> {
-        let resolve = DiscoveryDavResolve::new(domain, service, self.dns.clone());
+        let resolve = DiscoveryDavResolve::new(domain, service, self.dns.clone())
+            .with_secure_only(self.secure_only);
 
         let config_service = match service {
             DiscoveryDavService::Caldav => DiscoveryService::Caldav,
@@ -886,7 +934,9 @@ impl DiscoveryComposeClientStd {
         };
 
         match run(&mut self.pool(), resolve) {
-            Ok(url) => vec![DiscoveryServiceConfig::from_dav(config_service, url)],
+            Ok(url) => {
+                self.keep_secure(vec![DiscoveryServiceConfig::from_dav(config_service, url)])
+            }
             Err(err) => {
                 debug!("skip RFC 6764 DAV resolve");
                 trace!("{err:?}");
@@ -900,10 +950,10 @@ impl DiscoveryComposeClientStd {
         let resolve = DiscoveryJmapResolve::new(domain, self.dns.clone());
 
         match run(&mut self.pool(), resolve) {
-            Ok(session) => vec![DiscoveryServiceConfig::from_jmap(
+            Ok(session) => self.keep_secure(vec![DiscoveryServiceConfig::from_jmap(
                 session.url,
                 &session.auth_schemes,
-            )],
+            )]),
             Err(err) => {
                 debug!("skip RFC 8620 JMAP resolve");
                 trace!("{err:?}");

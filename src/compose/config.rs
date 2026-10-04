@@ -48,6 +48,17 @@ pub struct DiscoveryServiceConfig {
 }
 
 impl DiscoveryServiceConfig {
+    /// Whether the endpoint is reached encrypted: a TCP endpoint over
+    /// TLS or STARTTLS, or an `https` URL.
+    pub fn is_secure(&self) -> bool {
+        match &self.endpoint {
+            DiscoveryEndpoint::Tcp { security, .. } => *security != DiscoverySecurity::Plain,
+            DiscoveryEndpoint::Http(url) => {
+                Url::parse(url).is_ok_and(|url| url.scheme() == "https")
+            }
+        }
+    }
+
     /// The URLs whose unauthenticated 401 may advertise the config's
     /// schemes (to feed [`refine_auth`]): the HTTP endpoint itself,
     /// then the service's well-known path for the DAV services (some
@@ -467,8 +478,8 @@ mod tests {
     use alloc::{string::ToString, vec};
 
     use crate::compose::config::{
-        DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoveryService,
-        DiscoveryServiceConfig,
+        DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoverySecurity,
+        DiscoveryService, DiscoveryServiceConfig,
     };
 
     #[cfg(feature = "rfc6186")]
@@ -508,7 +519,7 @@ mod tests {
             DiscoveryEndpoint::Tcp {
                 host: "smtp.migadu.com".to_string(),
                 port: 465,
-                security: super::DiscoverySecurity::Tls,
+                security: DiscoverySecurity::Tls,
             },
         );
         assert_eq!(smtp.source, DiscoveryConfigSource::Srv);
@@ -541,6 +552,29 @@ mod tests {
         // Unknown schemes leave the config as discovered.
         config.refine_auth(&["negotiate".to_string()]);
         assert!(config.auth.contains(&DiscoveryAuthMethod::Bearer));
+    }
+
+    #[test]
+    fn plain_and_http_endpoints_are_not_secure() {
+        let config = |endpoint| DiscoveryServiceConfig {
+            service: DiscoveryService::Imap,
+            endpoint,
+            username: None,
+            auth: vec![],
+            source: DiscoveryConfigSource::IspMain,
+        };
+        let tcp = |security| DiscoveryEndpoint::Tcp {
+            host: "imap.example.com".to_string(),
+            port: 143,
+            security,
+        };
+        let http = |url: &str| DiscoveryEndpoint::Http(url.to_string());
+
+        assert!(!config(tcp(DiscoverySecurity::Plain)).is_secure());
+        assert!(config(tcp(DiscoverySecurity::Starttls)).is_secure());
+        assert!(config(tcp(DiscoverySecurity::Tls)).is_secure());
+        assert!(!config(http("http://dav.example.com/")).is_secure());
+        assert!(config(http("https://dav.example.com/")).is_secure());
     }
 
     #[test]

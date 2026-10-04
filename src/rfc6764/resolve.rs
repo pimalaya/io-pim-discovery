@@ -80,6 +80,7 @@ pub struct DiscoveryDavResolve {
     service: DiscoveryDavService,
     domain: String,
     resolver: Url,
+    secure_only: bool,
     state: State,
 }
 
@@ -95,19 +96,42 @@ impl DiscoveryDavResolve {
             service,
             domain,
             resolver,
+            secure_only: false,
             state: State::Srv(srv),
+        }
+    }
+
+    /// Ignores the plain `_caldav` / `_carddav` record when
+    /// `secure_only` is set, so that no `http://` origin is built: the
+    /// origin is then the TLS record's, or `https` on the domain.
+    pub fn with_secure_only(mut self, secure_only: bool) -> Self {
+        self.secure_only = secure_only;
+        self
+    }
+
+    /// Picks the SRV record fixing the origin, paired with whether it
+    /// is the TLS one: the TLS record first, then the plain one unless
+    /// secure-only.
+    fn record(
+        &self,
+        secure: Option<DiscoverySrvService>,
+        plain: Option<DiscoverySrvService>,
+    ) -> Option<(bool, DiscoverySrvService)> {
+        match (secure, plain) {
+            (Some(secure), _) => Some((true, secure)),
+            (None, Some(plain)) if !self.secure_only => Some((false, plain)),
+            _ => None,
         }
     }
 
     fn origin(
         &self,
-        secure: Option<DiscoverySrvService>,
-        plain: Option<DiscoverySrvService>,
+        record: Option<&(bool, DiscoverySrvService)>,
     ) -> Result<Url, DiscoveryDavResolveError> {
-        let (scheme, host, port) = match (secure, plain) {
-            (Some(s), _) => ("https", s.host, s.port),
-            (None, Some(p)) => ("http", p.host, p.port),
-            (None, None) => ("https", self.domain.clone(), 443),
+        let (scheme, host, port) = match record {
+            Some((true, srv)) => ("https", srv.host.as_str(), srv.port),
+            Some((false, srv)) => ("http", srv.host.as_str(), srv.port),
+            None => ("https", self.domain.as_str(), 443),
         };
 
         let raw = format!("{scheme}://{host}:{port}/");
@@ -128,16 +152,16 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
                         DiscoveryDavService::Carddav => (report.carddavs, report.carddav),
                     };
 
+                    let record = self.record(secure, plain);
+
                     // RFC 6764 §6 only queries the TXT `path` record for
                     // a name that actually published an SRV record; with
                     // no SRV record there is no service name to look up.
-                    let txt_qname = match (&secure, &plain) {
-                        (Some(_), _) => Some(self.service.srv_qname(true, &self.domain)),
-                        (None, Some(_)) => Some(self.service.srv_qname(false, &self.domain)),
-                        (None, None) => None,
-                    };
+                    let txt_qname = record
+                        .as_ref()
+                        .map(|(tls, _)| self.service.srv_qname(*tls, &self.domain));
 
-                    let origin = match self.origin(secure, plain) {
+                    let origin = match self.origin(record.as_ref()) {
                         Ok(origin) => origin,
                         Err(err) => return DiscoveryCoroutineState::Complete(Err(err)),
                     };
@@ -167,7 +191,7 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
                     debug!("skip failed SRV lookups, probe .well-known");
                     trace!("{err:?}");
 
-                    let origin = match self.origin(None, None) {
+                    let origin = match self.origin(None) {
                         Ok(origin) => origin,
                         Err(err) => return DiscoveryCoroutineState::Complete(Err(err)),
                     };
@@ -290,4 +314,41 @@ enum Candidate {
     TxtPath,
     /// The origin itself, the last resort.
     Origin,
+}
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    use crate::{
+        rfc6186::service::DiscoverySrvService,
+        rfc6764::{resolve::DiscoveryDavResolve, service::DiscoveryDavService},
+    };
+
+    fn origin(secure_only: bool) -> Url {
+        let resolver = Url::parse("tcp://1.1.1.1:53").unwrap();
+        let resolve =
+            DiscoveryDavResolve::new("example.com", DiscoveryDavService::Caldav, resolver)
+                .with_secure_only(secure_only);
+
+        let plain = DiscoverySrvService {
+            host: "dav.example.com".into(),
+            port: 8080,
+            priority: 0,
+            weight: 1,
+        };
+
+        let record = resolve.record(None, Some(plain));
+        resolve.origin(record.as_ref()).unwrap()
+    }
+
+    #[test]
+    fn plain_record_builds_an_http_origin() {
+        assert_eq!(origin(false).as_str(), "http://dav.example.com:8080/");
+    }
+
+    #[test]
+    fn secure_only_ignores_the_plain_record() {
+        assert_eq!(origin(true).as_str(), "https://example.com/");
+    }
 }

@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the resolution of advertised CalDAV and CardDAV roots. A config whose endpoint has no path, from a source other than the RFC 6764 walk (PACC, autoconfig, a provider rule), is probed at `/.well-known/{caldav,carddav}` (RFC 6764 §5) by every `compose_*`. A probe ending on a DAV server replaces the endpoint with that context root. Fastmail advertises bare hosts whose `/` answers 404: they now come out as `https://carddav.fastmail.com/dav/addressbooks` and `https://caldav.fastmail.com/dav/calendars`.
+
+- Added `resolved` to `DiscoveryServiceConfig`, serialized as `resolved`: true when the endpoint came out of an RFC 6764 resolution. **Breaking** for code building the struct literally.
+
 ### Changed
+
+- Changed the reduction of `compose_all` and `compose_first` to keep a resolved endpoint over an unresolved one when it merges a subdomain with its parent host. Before, the parent host always won, so an advertised bare origin hid the shard the RFC 6764 walk had resolved.
+
 
 - Changed a DNS resolver that does not answer into an error. **Breaking.**
 

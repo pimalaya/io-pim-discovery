@@ -42,8 +42,11 @@ impl DiscoveryConfigCollector {
     /// existing config instead of duplicating it. HTTP endpoints
     /// compare as normalized URLs, and a subdomain of an already
     /// collected host counts as the same service reached through a
-    /// rotated backend name: the parent host wins the endpoint, since
-    /// only it is worth persisting in an account.
+    /// rotated backend name. A resolved endpoint (RFC 6764) wins over
+    /// an advertised one, since an advertised bare origin may not be a
+    /// DAV context root at all; between two of the same kind, the
+    /// parent host wins, since only it is worth persisting in an
+    /// account.
     pub fn collect(&mut self, configs: Vec<DiscoveryServiceConfig>) {
         for config in configs {
             if !self.wants(config.service) {
@@ -60,9 +63,17 @@ impl DiscoveryConfigCollector {
 
             match existing {
                 Some(existing) => {
-                    if existing.endpoint.subdomain_of(&config.endpoint) {
+                    let takes_over = if existing.resolved != config.resolved {
+                        config.resolved
+                    } else {
+                        existing.endpoint.subdomain_of(&config.endpoint)
+                    };
+                    if takes_over {
                         existing.endpoint = config.endpoint;
                         existing.source = config.source;
+                        existing.resolved = config.resolved;
+                    } else if config.resolved && existing.endpoint.equivalent(&config.endpoint) {
+                        existing.resolved = true;
                     }
                     for method in config.auth {
                         if !existing.auth.contains(&method) {
@@ -83,5 +94,91 @@ impl DiscoveryConfigCollector {
     /// Returns the collected configs, consuming the collector.
     pub fn finish(self) -> Vec<DiscoveryServiceConfig> {
         self.configs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{
+        collections::BTreeSet,
+        string::{String, ToString},
+        vec,
+    };
+
+    use super::DiscoveryConfigCollector;
+    use crate::compose::config::{
+        DiscoveryConfigSource, DiscoveryEndpoint, DiscoveryService, DiscoveryServiceConfig,
+    };
+
+    fn carddav(url: &str, source: DiscoveryConfigSource, resolved: bool) -> DiscoveryServiceConfig {
+        let mut config = DiscoveryServiceConfig::from_dav(DiscoveryService::Carddav, url);
+        config.source = source;
+        config.resolved = resolved;
+        config
+    }
+
+    fn endpoint(configs: &[DiscoveryServiceConfig]) -> (String, bool) {
+        assert_eq!(configs.len(), 1);
+        let DiscoveryEndpoint::Http(url) = &configs[0].endpoint else {
+            panic!("HTTP endpoint expected")
+        };
+        (url.to_string(), configs[0].resolved)
+    }
+
+    #[test]
+    fn a_resolved_shard_wins_over_its_advertised_parent() {
+        // Fastmail: PACC advertises the bare host, RFC 6764 resolves a shard.
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![carddav(
+            "https://carddav.fastmail.com/",
+            DiscoveryConfigSource::Pacc,
+            false,
+        )]);
+        collector.collect(vec![carddav(
+            "https://d277161.carddav.fastmail.com/dav/addressbooks",
+            DiscoveryConfigSource::Dav,
+            true,
+        )]);
+        assert_eq!(
+            endpoint(&collector.finish()),
+            (
+                "https://d277161.carddav.fastmail.com/dav/addressbooks".into(),
+                true
+            )
+        );
+
+        // Both resolved: the parent host wins, as before.
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![carddav(
+            "https://carddav.fastmail.com/dav/addressbooks",
+            DiscoveryConfigSource::Pacc,
+            true,
+        )]);
+        collector.collect(vec![carddav(
+            "https://d277161.carddav.fastmail.com/dav/addressbooks",
+            DiscoveryConfigSource::Dav,
+            true,
+        )]);
+        assert_eq!(
+            endpoint(&collector.finish()),
+            ("https://carddav.fastmail.com/dav/addressbooks".into(), true)
+        );
+
+        // A resolved parent is not replaced by an advertised shard.
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![carddav(
+            "https://carddav.fastmail.com/dav/addressbooks",
+            DiscoveryConfigSource::Dav,
+            true,
+        )]);
+        collector.collect(vec![carddav(
+            "https://d1.carddav.fastmail.com/",
+            DiscoveryConfigSource::Ispdb,
+            false,
+        )]);
+        assert_eq!(
+            endpoint(&collector.finish()),
+            ("https://carddav.fastmail.com/dav/addressbooks".into(), true)
+        );
     }
 }

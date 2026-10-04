@@ -106,6 +106,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
         username: Some(email.to_string()),
         auth: oauth(scope),
         source,
+        resolved: false,
     };
 
     vec![
@@ -119,6 +120,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: mail_auth.clone(),
             source,
+            resolved: false,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Pop3,
@@ -130,6 +132,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: mail_auth.clone(),
             source,
+            resolved: false,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Smtp,
@@ -141,6 +144,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: mail_auth,
             source,
+            resolved: false,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Caldav,
@@ -150,6 +154,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: oauth("https://www.googleapis.com/auth/calendar"),
             source,
+            resolved: false,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Carddav,
@@ -159,6 +164,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: oauth("https://www.googleapis.com/auth/carddav"),
             source,
+            resolved: false,
         },
         api(
             DiscoveryService::Gmail,
@@ -207,6 +213,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
         username: Some(email.to_string()),
         auth: auth(scope),
         source,
+        resolved: false,
     };
 
     vec![
@@ -220,6 +227,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: auth("https://outlook.office.com/IMAP.AccessAsUser.All"),
             source,
+            resolved: false,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Pop3,
@@ -231,6 +239,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: auth("https://outlook.office.com/POP.AccessAsUser.All"),
             source,
+            resolved: false,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Smtp,
@@ -242,6 +251,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             username: Some(email.to_string()),
             auth: auth("https://outlook.office.com/SMTP.Send"),
             source,
+            resolved: false,
         },
         graph(DiscoveryService::Msgraph, "Mail.ReadWrite Mail.Send"),
         graph(DiscoveryService::MsgraphCalendar, "Calendars.ReadWrite"),

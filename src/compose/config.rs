@@ -51,6 +51,11 @@ pub struct DiscoveryServiceConfig {
 
     /// The mechanism that produced this config.
     pub source: DiscoveryConfigSource,
+
+    /// Whether the endpoint came out of an RFC 6764 resolution (the
+    /// `dav` mechanism's walk, or the well-known probe of an advertised
+    /// bare origin) rather than as a mechanism advertised it.
+    pub resolved: bool,
 }
 
 impl DiscoveryServiceConfig {
@@ -217,6 +222,7 @@ impl DiscoveryServiceConfig {
                 username: server.username.as_deref().map(|u| substitute(u, email)),
                 auth,
                 source,
+                resolved: false,
             });
         }
 
@@ -263,6 +269,7 @@ impl DiscoveryServiceConfig {
                 username: None,
                 auth: auth.clone(),
                 source: DiscoveryConfigSource::Pacc,
+                resolved: false,
             });
         }
 
@@ -284,6 +291,7 @@ impl DiscoveryServiceConfig {
                 username: None,
                 auth: auth.clone(),
                 source: DiscoveryConfigSource::Pacc,
+                resolved: false,
             });
         }
 
@@ -342,6 +350,7 @@ impl DiscoveryServiceConfig {
                 username: None,
                 auth: vec![DiscoveryAuthMethod::Password],
                 source: DiscoveryConfigSource::Srv,
+                resolved: false,
             });
         }
 
@@ -358,6 +367,7 @@ impl DiscoveryServiceConfig {
             username: None,
             auth: vec![DiscoveryAuthMethod::Password],
             source: DiscoveryConfigSource::Dav,
+            resolved: true,
         }
     }
 
@@ -384,6 +394,7 @@ impl DiscoveryServiceConfig {
             username: None,
             auth,
             source: DiscoveryConfigSource::Jmap,
+            resolved: false,
         }
     }
 }
@@ -547,6 +558,7 @@ mod tests {
                 DiscoveryAuthMethod::Password,
             ],
             source: DiscoveryConfigSource::Pacc,
+            resolved: false,
         };
 
         // The endpoint advertises bearer only: the account-level
@@ -573,6 +585,7 @@ mod tests {
             username: None,
             auth: vec![],
             source: DiscoveryConfigSource::IspMain,
+            resolved: false,
         };
         let tcp = |security| DiscoveryEndpoint::Tcp {
             host: "imap.example.com".to_string(),
@@ -607,6 +620,7 @@ mod tests {
                 scope: None,
             }],
             source: DiscoveryConfigSource::IspMain,
+            resolved: false,
         };
 
         let provider_json = to_value(&provider).unwrap();
@@ -616,6 +630,14 @@ mod tests {
         let autoconfig_json = to_value(&autoconfig).unwrap();
         assert_eq!(autoconfig_json["source"], "ispMain");
         assert!(autoconfig_json.get("provider").is_none());
+        assert_eq!(autoconfig_json["resolved"], false);
+        let dav = to_value(DiscoveryServiceConfig::from_dav(
+            DiscoveryService::Carddav,
+            "https://dav.example.com/dav",
+        ))
+        .unwrap();
+        assert_eq!(dav["resolved"], true);
+        assert!(from_value::<DiscoveryServiceConfig>(dav).unwrap().resolved);
 
         no_snake_case_key(&provider_json);
         no_snake_case_key(&autoconfig_json);
@@ -745,6 +767,8 @@ struct DiscoveryServiceConfigWire {
     username: Option<String>,
     auth: Vec<DiscoveryAuthMethod>,
     source: DiscoveryConfigSourceWire,
+    #[serde(default)]
+    resolved: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider: Option<DiscoveryKnownProvider>,
 }
@@ -784,6 +808,7 @@ impl From<DiscoveryServiceConfig> for DiscoveryServiceConfigWire {
             username: config.username,
             auth: config.auth,
             source,
+            resolved: config.resolved,
             provider,
         }
     }
@@ -814,6 +839,7 @@ impl TryFrom<DiscoveryServiceConfigWire> for DiscoveryServiceConfig {
             username: wire.username,
             auth: wire.auth,
             source,
+            resolved: wire.resolved,
         })
     }
 }

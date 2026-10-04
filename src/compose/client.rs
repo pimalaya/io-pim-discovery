@@ -46,12 +46,16 @@ use crate::autoconfig::{isp::DiscoveryIsp, mailconf::DiscoveryMailconf, mx::Disc
 use crate::compose::config::DiscoveryAuthMethod;
 #[cfg(feature = "autoconfig")]
 use crate::compose::config::DiscoveryConfigSource;
+#[cfg(feature = "rfc6764")]
+use crate::compose::config::DiscoveryEndpoint;
 #[cfg(feature = "pacc")]
 use crate::pacc::discover::DiscoveryPacc;
 #[cfg(feature = "rfc6186")]
 use crate::rfc6186::discover::DiscoverySrv;
 #[cfg(feature = "rfc6764")]
-use crate::rfc6764::{resolve::DiscoveryDavResolve, service::DiscoveryDavService};
+use crate::rfc6764::{
+    resolve::DiscoveryDavResolve, service::DiscoveryDavService, well_known::DiscoveryWellKnown,
+};
 #[cfg(feature = "rfc8414")]
 use crate::rfc8414::{DiscoveryOauthServerMetadata, DiscoveryOauthServerResolve};
 #[cfg(feature = "rfc8620")]
@@ -226,7 +230,8 @@ impl DiscoveryComposeClientStd {
         email: &str,
         services: BTreeSet<DiscoveryService>,
     ) -> Result<Vec<DiscoveryServiceConfig>, DiscoveryComposeClientStdError> {
-        let outputs = self.parallel_outputs(email, &services)?;
+        let mut outputs = self.parallel_outputs(email, &services)?;
+        self.resolve_dav_roots(&mut outputs, None);
 
         let mut configs: Vec<DiscoveryServiceConfig> = outputs
             .into_iter()
@@ -360,10 +365,14 @@ impl DiscoveryComposeClientStd {
         debug!("begin config compose");
         trace!("email {email}, first: {first}, services: {services:?}, deadline: {deadline:?}");
 
-        let outputs = match deadline {
+        let started = Instant::now();
+        let mut outputs = match deadline {
             Some(deadline) => self.parallel_outputs_within(email, &services, deadline)?,
             None => self.parallel_outputs(email, &services)?,
         };
+        // Before the reduction, so it can prefer a resolved endpoint.
+        let left = deadline.map(|deadline| deadline.saturating_sub(started.elapsed()));
+        self.resolve_dav_roots(&mut outputs, left);
         let mut collector = DiscoveryConfigCollector::new(services);
 
         for configs in outputs {
@@ -719,6 +728,98 @@ impl DiscoveryComposeClientStd {
         }
 
         configs
+    }
+
+    /// Resolves, in place, every advertised CalDAV or CardDAV endpoint
+    /// that carries no path (RFC 6764 §5): its origin is probed at
+    /// `/.well-known/{caldav,carddav}`, once per origin and service and
+    /// in parallel, and a probe ending on a DAV server replaces the
+    /// endpoint with that context root and marks the config resolved.
+    /// A bare origin is not necessarily a DAV collection (Fastmail
+    /// answers 404 at `/`), so taking it as advertised leaves a client
+    /// whose principal lookup fails. A probe that fails, finds no
+    /// redirect, or misses `deadline` leaves the config as it was.
+    #[cfg(feature = "rfc6764")]
+    fn resolve_dav_roots(
+        &self,
+        outputs: &mut [Vec<DiscoveryServiceConfig>],
+        deadline: Option<Duration>,
+    ) {
+        let mut targets: Vec<(DiscoveryDavService, Url)> = Vec::new();
+        for config in outputs.iter().flatten() {
+            if let Some(target) = dav_root_target(config)
+                && !targets.contains(&target)
+            {
+                targets.push(target);
+            }
+        }
+        if targets.is_empty() {
+            return;
+        }
+
+        let client = Arc::new(self.clone_shallow());
+        let tasks: Vec<_> = targets
+            .iter()
+            .cloned()
+            .map(|(service, origin)| {
+                let client = client.clone();
+                move || {
+                    debug!("probe advertised DAV origin through its well-known URI");
+                    trace!("{service:?} {origin}");
+                    match run(&mut client.pool(), DiscoveryWellKnown::new(origin, service)) {
+                        Ok(root) => root,
+                        Err(err) => {
+                            debug!("skip failed well-known probe");
+                            trace!("{err:?}");
+                            None
+                        }
+                    }
+                }
+            })
+            .collect();
+        let roots: Vec<Option<Url>> = match deadline {
+            Some(deadline) => collect_within(tasks, deadline)
+                .into_iter()
+                .map(Option::flatten)
+                .collect(),
+            None => thread::scope(|scope| {
+                let handles: Vec<_> = tasks.into_iter().map(|task| scope.spawn(task)).collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or(None))
+                    .collect()
+            }),
+        };
+
+        for config in outputs.iter_mut().flatten() {
+            let Some(target) = dav_root_target(config) else {
+                continue;
+            };
+            let Some(Some(root)) = targets
+                .iter()
+                .position(|known| *known == target)
+                .map(|index| &roots[index])
+            else {
+                continue;
+            };
+            if self.secure_only && root.scheme() != "https" {
+                continue;
+            }
+            debug!("advertised DAV origin resolved to its context root");
+            trace!("{} -> {root}", target.1);
+            config.endpoint = DiscoveryEndpoint::Http(root.to_string());
+            config.resolved = true;
+        }
+    }
+
+    /// No-op when RFC 6764 is not compiled in: advertised DAV origins
+    /// stay as they were.
+    #[cfg(not(feature = "rfc6764"))]
+    fn resolve_dav_roots(
+        &self,
+        _outputs: &mut [Vec<DiscoveryServiceConfig>],
+        _deadline: Option<Duration>,
+    ) {
     }
 
     /// Probes each config's endpoints for their advertised
@@ -1085,6 +1186,34 @@ where
 /// keeps running in the background and its result is dropped when it
 /// finally sends to the now-disconnected channel. Order matches the
 /// input, never completion order.
+/// The service and origin to probe for `config`'s DAV context root: an
+/// advertised (not yet resolved) CalDAV or CardDAV endpoint whose URL
+/// carries no path. `None` for anything else.
+#[cfg(feature = "rfc6764")]
+fn dav_root_target(config: &DiscoveryServiceConfig) -> Option<(DiscoveryDavService, Url)> {
+    let service = match config.service {
+        DiscoveryService::Caldav => DiscoveryDavService::Caldav,
+        DiscoveryService::Carddav => DiscoveryDavService::Carddav,
+        _ => return None,
+    };
+    if config.resolved {
+        return None;
+    }
+    let DiscoveryEndpoint::Http(raw) = &config.endpoint else {
+        return None;
+    };
+    let mut url = Url::parse(raw).ok()?;
+    if !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || !matches!(url.scheme(), "http" | "https")
+    {
+        return None;
+    }
+    url.set_path("/");
+    url.set_fragment(None);
+    Some((service, url))
+}
+
 fn collect_within<T, F>(tasks: Vec<F>, deadline: Duration) -> Vec<Option<T>>
 where
     T: Send + 'static,
@@ -1134,6 +1263,131 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         format!("tcp://127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// A local HTTP server shaped like Fastmail's DAV hosts: `/` and
+    /// anything else answer 404, `/.well-known/carddav` redirects to
+    /// `/dav/addressbooks`, which answers the unauthenticated 401 of a
+    /// DAV server. With `redirect` false, the well-known URI 404s too.
+    #[cfg(feature = "rfc6764")]
+    fn dav_host(redirect: bool) -> Url {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut stream = stream;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+                        let mut length = 0;
+                        loop {
+                            let mut header = String::new();
+                            if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                                return;
+                            }
+                            if header == "\r\n" {
+                                break;
+                            }
+                            if let Some(value) =
+                                header.to_ascii_lowercase().strip_prefix("content-length:")
+                            {
+                                length = value.trim().parse().unwrap_or(0);
+                            }
+                        }
+                        let mut body = vec![0; length];
+                        let _ = reader.read_exact(&mut body);
+                        let head = match path.as_str() {
+                            "/.well-known/carddav" if redirect => format!(
+                                "HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.1:{port}/dav/addressbooks"
+                            ),
+                            "/dav/addressbooks" => {
+                                "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"dav\""
+                                    .to_string()
+                            }
+                            _ => "HTTP/1.1 404 Not Found".to_string(),
+                        };
+                        if stream
+                            .write_all(format!("{head}\r\nContent-Length: 0\r\n\r\n").as_bytes())
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}").parse().unwrap()
+    }
+
+    #[cfg(feature = "rfc6764")]
+    fn advertised(service: DiscoveryService, url: &Url) -> DiscoveryServiceConfig {
+        let mut config = DiscoveryServiceConfig::from_dav(service, url);
+        config.source = DiscoveryConfigSource::Ispdb;
+        config.resolved = false;
+        config
+    }
+
+    #[cfg(feature = "rfc6764")]
+    #[test]
+    fn an_advertised_bare_dav_host_is_resolved_through_its_well_known_uri() {
+        let client = DiscoveryComposeClientStd::new(closed_resolver(), Tls::default());
+        let host = dav_host(true);
+        let mut with_path = host.clone();
+        with_path.set_path("/dav/other");
+        let mut outputs = vec![
+            vec![
+                advertised(DiscoveryService::Carddav, &host),
+                advertised(DiscoveryService::Imap, &host),
+            ],
+            vec![
+                advertised(DiscoveryService::Carddav, &host),
+                advertised(DiscoveryService::Carddav, &with_path),
+            ],
+        ];
+        client.resolve_dav_roots(&mut outputs, None);
+
+        let expected = DiscoveryEndpoint::Http(format!("{}dav/addressbooks", host));
+        assert_eq!(outputs[0][0].endpoint, expected);
+        assert!(outputs[0][0].resolved);
+        assert_eq!(
+            outputs[1][0].endpoint, expected,
+            "every config of the origin"
+        );
+        assert!(!outputs[0][1].resolved, "not a DAV service");
+        assert_eq!(
+            outputs[1][1].endpoint,
+            DiscoveryEndpoint::Http(with_path.to_string()),
+            "a path is the provider's own root"
+        );
+        assert!(!outputs[1][1].resolved);
+    }
+
+    #[cfg(feature = "rfc6764")]
+    #[test]
+    fn a_bare_dav_host_without_redirect_stays_as_advertised() {
+        let client = DiscoveryComposeClientStd::new(closed_resolver(), Tls::default());
+        let host = dav_host(false);
+        let mut outputs = vec![vec![advertised(DiscoveryService::Carddav, &host)]];
+        client.resolve_dav_roots(&mut outputs, Some(Duration::from_secs(30)));
+        assert_eq!(
+            outputs[0][0].endpoint,
+            DiscoveryEndpoint::Http(host.to_string())
+        );
+        assert!(!outputs[0][0].resolved);
+
+        // Secure-only: the pool has no `http` factory, nothing is reached.
+        let secure = DiscoveryComposeClientStd::new(closed_resolver(), Tls::default())
+            .with_secure_only(true);
+        let mut outputs = vec![vec![advertised(DiscoveryService::Carddav, &dav_host(true))]];
+        secure.resolve_dav_roots(&mut outputs, None);
+        assert!(!outputs[0][0].resolved);
     }
 
     #[test]

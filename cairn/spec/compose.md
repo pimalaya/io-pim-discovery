@@ -12,7 +12,7 @@ The `compose` module reduces the individual mechanisms into a single ranked list
 Composition SHALL reduce the fixed-provider rules first: when the email domain (or its MX records) matches a known provider (Google, Microsoft), the provider's own configs are produced and tag their source as `Provider`. Provider detection is exposed on its own (`provider`, `is_google`, `is_microsoft`).
 
 ### Requirement: Ordered mechanism fan-out
-For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested. `compose_raw`, and the CLI that prints it, SHALL concatenate their configs into one list in that order without deduplicating: each stays the answer of one source, and an endpoint named by several sources appears once per source, merging being the consumer's. `compose_all` and `compose_first` SHALL merge them into one ranked list for callers wanting a single answer (a setup wizard).
+For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested. `compose_raw`, and the CLI that prints it, SHALL concatenate their configs into one list in that order without deduplicating: each stays the answer of one source, and an endpoint named by several sources appears once per source, merging being the consumer's. `compose_all` and `compose_first` SHALL merge them into one ranked list for callers wanting a single answer (a setup wizard); when they merge a subdomain with its parent host, a resolved endpoint SHALL win over an unresolved one, and between two of the same kind the parent host SHALL win.
 
 ### Requirement: Composition entry points
 The client SHALL expose `compose_all` (every reachable config), `compose_first` (the first mechanism, in priority order, that yields one), and `compose_raw` (per-mechanism output without merging). Each mechanism is also reachable directly (`autoconfig`, `srv`, `pacc`, `dav`, `jmap`, `auth`, `oauth_server`, `oauth_resource`).
@@ -22,6 +22,19 @@ The client SHALL expose `compose_all` (every reachable config), `compose_first` 
 
 ### Requirement: Auth refinement
 A composed config's advertised auth MAY be refined against a live `WWW-Authenticate` probe: probed schemes replace account-level claims (a password claim drops when only bearer is challenged), while an OAuth issuer is preserved.
+
+### Requirement: Advertised DAV roots are resolved
+Composition SHALL probe every CalDAV or CardDAV config whose HTTP endpoint carries no path and that no RFC 6764 resolution produced, at `/.well-known/{caldav,carddav}` (RFC 6764 §5), once per origin and service, without credentials. When the probe ends on a DAV server, the config's endpoint SHALL become that context root and the config SHALL be marked resolved; otherwise it SHALL stay as advertised. `compose_raw`, `compose_all`, `compose_first` and `compose_all_within` SHALL run it, the last one within its deadline. In secure-only mode the probe SHALL NOT follow a redirect to `http://`.
+
+#### Scenario: A provider advertises a bare DAV host
+- GIVEN a configuration document naming `https://carddav.example.com`, whose `/` is not a DAV collection and whose `/.well-known/carddav` redirects to `/dav/addressbooks`
+- WHEN discovery runs
+- THEN the config's endpoint is `https://carddav.example.com/dav/addressbooks` and it is marked resolved
+
+#### Scenario: An origin without redirect
+- GIVEN an advertised bare DAV host whose well-known URI does not redirect
+- WHEN discovery runs
+- THEN the config stays as advertised and is not marked resolved
 
 ### Requirement: Provider API services
 The service kinds SHALL include the providers' own APIs: `gmail` (Gmail API), `gcal` (Google Calendar), `gpeople` (Google People), `msgraph` (Microsoft Graph mail), `msgraphCalendar` and `msgraphContacts`. The Google fixed rule SHALL yield `gmail`, `gcal` and `gpeople` and the Microsoft fixed rule `msgraph`, `msgraphCalendar` and `msgraphContacts`, each with its API base URL and its OAuth scope, next to the protocol services the rules already yield, so a consumer can offer the choice.
@@ -58,7 +71,7 @@ The client SHALL offer a secure-only mode (`--secure-only` on the CLI), off by d
 - THEN no request is made to the `http://` URL and no config comes from it
 
 ### Requirement: One JSON shape
-Every config SHALL serialize with camelCase keys, its `source` as a string naming the mechanism that produced it, and, when a fixed provider rule matched, a `provider` field naming the provider.
+Every config SHALL serialize with camelCase keys, its `source` as a string naming the mechanism that produced it, a `resolved` flag (true when its endpoint came out of an RFC 6764 resolution), and, when a fixed provider rule matched, a `provider` field naming the provider.
 
 #### Scenario: A provider config and an autoconfig one read alike
 - GIVEN a Google address and a domain with an autoconfig document

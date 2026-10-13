@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Changed secure-only mode to refuse a plain `http://` DNS resolver, with an error, before any request.
 
+### Fixed
+
+- Fixed a discovery probe buffering whatever a host sent, and spinning forever on a connection closed mid-body. io-http is pinned to an unreleased fix (e181530) that caps response heads at 64 KiB and bodies at 256 MiB, fails on a body cut short, and no longer panics on a hostile chunk size.
+
 ## [0.9.0] - 2026-10-04
 
 ### Added

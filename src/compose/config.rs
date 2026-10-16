@@ -750,6 +750,9 @@ pub enum DiscoveryConfigSource {
     Mailconf,
     /// The Thunderbird ISPDB.
     Ispdb,
+    /// The autoconfig of the provider named by the MX records: its ISP
+    /// main URL, then its ISPDB entry.
+    Mx,
     /// RFC 6186 SRV records.
     Srv,
     /// RFC 6764 CalDAV/CardDAV resolve.
@@ -783,6 +786,7 @@ enum DiscoveryConfigSourceWire {
     IspFallback,
     Mailconf,
     Ispdb,
+    Mx,
     Srv,
     Dav,
     Jmap,
@@ -797,6 +801,7 @@ impl From<DiscoveryServiceConfig> for DiscoveryServiceConfigWire {
             DiscoveryConfigSource::IspFallback => (DiscoveryConfigSourceWire::IspFallback, None),
             DiscoveryConfigSource::Mailconf => (DiscoveryConfigSourceWire::Mailconf, None),
             DiscoveryConfigSource::Ispdb => (DiscoveryConfigSourceWire::Ispdb, None),
+            DiscoveryConfigSource::Mx => (DiscoveryConfigSourceWire::Mx, None),
             DiscoveryConfigSource::Srv => (DiscoveryConfigSourceWire::Srv, None),
             DiscoveryConfigSource::Dav => (DiscoveryConfigSourceWire::Dav, None),
             DiscoveryConfigSource::Jmap => (DiscoveryConfigSourceWire::Jmap, None),
@@ -828,6 +833,7 @@ impl TryFrom<DiscoveryServiceConfigWire> for DiscoveryServiceConfig {
             DiscoveryConfigSourceWire::IspFallback => DiscoveryConfigSource::IspFallback,
             DiscoveryConfigSourceWire::Mailconf => DiscoveryConfigSource::Mailconf,
             DiscoveryConfigSourceWire::Ispdb => DiscoveryConfigSource::Ispdb,
+            DiscoveryConfigSourceWire::Mx => DiscoveryConfigSource::Mx,
             DiscoveryConfigSourceWire::Srv => DiscoveryConfigSource::Srv,
             DiscoveryConfigSourceWire::Dav => DiscoveryConfigSource::Dav,
             DiscoveryConfigSourceWire::Jmap => DiscoveryConfigSource::Jmap,

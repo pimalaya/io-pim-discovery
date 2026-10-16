@@ -65,6 +65,23 @@ impl DiscoveryIsp {
         Url::parse(&url)
     }
 
+    /// Builds the URL of the main ISP location served by `host` for
+    /// `email` (`http[s]://<host>/mail/config-v1.1.xml?emailaddress=<email>`),
+    /// for a host not derived from the address: the provider named by
+    /// the MX records, or the target of an `autoconfig.<domain>` alias.
+    pub fn host_url(
+        email: impl AsRef<str>,
+        host: impl AsRef<str>,
+        secure: bool,
+    ) -> Result<Url, ParseError> {
+        let host = host.as_ref().trim_matches('.');
+        let s = if secure { "s" } else { "" };
+        let mut url = Url::parse(&format!("http{s}://{host}/mail/config-v1.1.xml"))?;
+        url.query_pairs_mut()
+            .append_pair("emailaddress", email.as_ref());
+        Ok(url)
+    }
+
     /// Builds the URL for the alternative ISP location
     /// (`http[s]://<domain>/.well-known/autoconfig/mail/config-v1.1.xml`).
     pub fn fallback_url(domain: impl AsRef<str>, secure: bool) -> Result<Url, ParseError> {

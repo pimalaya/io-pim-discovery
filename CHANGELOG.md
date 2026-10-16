@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `resolved` to `DiscoveryServiceConfig`, serialized as `resolved`: true when the endpoint came out of an RFC 6764 resolution. **Breaking** for code building the struct literally.
 
+- Added Thunderbird's MX fallback for domains publishing no autoconfig of their own: the registrable domain of each MX host (Public Suffix List, so never a public suffix's parent) is tried at its ISP main URL, then in the ISPDB. Its configs are tagged with the new `DiscoveryConfigSource::Mx`, serialized as `mx`. **Breaking** for exhaustive matches.
+
+- Added CNAME following to the ISP main URL: when `autoconfig.<domain>` fails and is an alias, the target of its chain is fetched instead, since a provider aliasing its customers' autoconfig to its own host rarely holds a certificate for the alias. A domain hosted at Migadu (MX at `flatmail.com`, whose autoconfig host serves a certificate for `admin.migadu.com` only) now discovers `imap.migadu.com` and `smtp.migadu.com`.
+
+- Added `DiscoveryDnsCname`, `DiscoveryIsp::host_url` and `mx_base_domain`, the bricks of both.
+
 ### Changed
 
 - Changed the reduction of `compose_all` and `compose_first` to keep a resolved endpoint over an unresolved one when it merges a subdomain with its parent host. Before, the parent host always won, so an advertised bare origin hid the shard the RFC 6764 walk had resolved.
@@ -23,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Discovery first asks the resolver about the address's domain (`check_resolver`, run by every `compose_*` and every CLI command). No answer, or a failing response code (`SERVFAIL`, `REFUSED`, an HTTP error from a DNS-over-HTTPS resolver), is now an error naming the resolver, where it gave an empty or partial list with exit 0. `NXDOMAIN` is still an answer.
 
 - Changed secure-only mode to refuse a plain `http://` DNS resolver, with an error, before any request.
+
+### Removed
+
+- Removed `mx_parent_domain`, replaced by `mx_base_domain`: stripping one label left `mx.flatmail.com` for `migadu-48722629.mx.flatmail.com`, and could reach the parent of a public suffix (`autoconfig.co.uk`), open to registration. **Breaking.**
 
 ### Fixed
 

@@ -196,26 +196,32 @@ impl DiscoveryCoroutine for DiscoveryDnsMx {
     }
 }
 
-/// Strips the leftmost label of an MX target so that ISP autoconfig
-/// URLs can be retried against the registrable parent
-/// (`mx.example.com` → `example.com`). Returns `None` for inputs with
-/// fewer than two dots after trailing-dot trimming.
-pub fn mx_parent_domain(target: &str) -> Option<String> {
-    let target = target.trim_end_matches('.');
+/// Returns the registrable domain of an MX target, per the Public
+/// Suffix List (`mx.example.co.uk` → `example.co.uk`), lowercased.
+///
+/// It names the mail host's provider, whose autoconfig serves the
+/// domains it hosts. `None` for a public suffix or an invalid name:
+/// the parent of a suffix is open to registration, so its autoconfig
+/// could be anyone's.
+pub fn mx_base_domain(target: &str) -> Option<String> {
+    let target = target.trim_end_matches('.').to_ascii_lowercase();
+    psl::domain_str(&target).map(ToString::to_string)
+}
 
-    let mut first_dot = None;
+#[cfg(test)]
+mod tests {
+    use crate::autoconfig::mx::*;
 
-    for (i, b) in target.bytes().enumerate() {
-        if b != b'.' {
-            continue;
-        }
-
-        if let Some(start) = first_dot {
-            return Some(target[start + 1..].to_string());
-        }
-
-        first_dot = Some(i);
+    #[test]
+    fn mx_base_domain_stops_at_the_registrable_domain() {
+        assert_eq!(
+            mx_base_domain("migadu-48722629.mx.flatmail.com."),
+            Some("flatmail.com".to_string())
+        );
+        assert_eq!(
+            mx_base_domain("MX1.Example.CO.UK"),
+            Some("example.co.uk".to_string())
+        );
+        assert_eq!(mx_base_domain("co.uk."), None);
     }
-
-    None
 }

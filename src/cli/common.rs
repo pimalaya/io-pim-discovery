@@ -210,6 +210,7 @@ fn source_name(source: DiscoveryConfigSource) -> &'static str {
         DiscoveryConfigSource::IspFallback => "isp-fallback",
         DiscoveryConfigSource::Mailconf => "mailconf",
         DiscoveryConfigSource::Ispdb => "ispdb",
+        DiscoveryConfigSource::Mx => "mx",
         DiscoveryConfigSource::Srv => "srv",
         DiscoveryConfigSource::Dav => "dav",
         DiscoveryConfigSource::Jmap => "jmap",

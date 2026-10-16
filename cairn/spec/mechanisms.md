@@ -9,7 +9,12 @@ status: current
 One module per mechanism or RFC, each probing a way providers publish their service settings and yielding raw configs. The source tree mirrors this organisation (one module per RFC).
 
 ### Requirement: Mozilla autoconfig
-The `autoconfig` mechanism SHALL fetch and parse the Mozilla/Thunderbird autoconfig XML from, in order, the ISP main URL, the ISP fallback URL, the mailconf TXT redirect target, and the Thunderbird ISPDB. Each source that yields a document is tagged with its own `DiscoveryConfigSource` (`IspMain`, `IspFallback`, `Mailconf`, `Ispdb`). Placeholders (`%EMAILADDRESS%`, `%EMAILLOCALPART%`, `%EMAILDOMAIN%`) are substituted, and a port omitted by the document is filled from the service/security defaults.
+The `autoconfig` mechanism SHALL fetch and parse the Mozilla/Thunderbird autoconfig XML from, in order, the ISP main URL, the ISP fallback URL, the mailconf TXT redirect target, the Thunderbird ISPDB, then the MX provider's. When the ISP main URL yields nothing and its host is a CNAME, the last target of the chain SHALL be fetched in its place. The MX provider is the registrable domain, per the Public Suffix List, of each MX host, best record first, other than the address's domain: its ISP main URL (the alias followed likewise), then its ISPDB entry; the first document wins, and a public suffix is never a provider. Each source that yields a document is tagged with its own `DiscoveryConfigSource` (`IspMain`, `IspFallback`, `Mailconf`, `Ispdb`, `Mx`). Placeholders (`%EMAILADDRESS%`, `%EMAILLOCALPART%`, `%EMAILDOMAIN%`) are substituted, and a port omitted by the document is filled from the service/security defaults.
+
+#### Scenario: A domain publishing only its MX records
+- GIVEN `test@migadu.net`, whose only record is an MX at `migadu-48722629.mx.flatmail.com`, and `autoconfig.flatmail.com` an alias of `autoconfig.migadu.com` serving a certificate for another name
+- WHEN email discovery runs
+- THEN it yields `imap.migadu.com:993` and `smtp.migadu.com:465` over TLS, tagged `Mx`
 
 ### Requirement: PACC
 The `pacc` mechanism SHALL fetch the provider auto-configuration (PACC) JSON document and verify its DNS-TXT digest, yielding one config per advertised protocol with its authentication data (including any OAuth issuer).

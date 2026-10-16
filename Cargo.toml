@@ -21,7 +21,7 @@ default = ["rustls-ring"]
 client = ["dep:anyhow", "dep:io-http", "io-http/client", "dep:url", "dep:resolv-conf", "dep:ipconfig"]
 stream = ["client", "dep:pimalaya-stream"]
 cli = ["stream", "autoconfig", "pacc", "rfc6186", "rfc6764", "rfc8620", "rfc8414", "rfc9728", "dep:clap", "pimalaya-cli/terminal", "pimalaya-cli/table"]
-autoconfig = ["dep:io-http", "dep:serde", "dep:serde-xml-rs", "dep:url"]
+autoconfig = ["dep:io-http", "dep:psl", "dep:serde", "dep:serde-xml-rs", "dep:url"]
 pacc = ["dep:io-http", "dep:serde", "dep:serde_json", "dep:url", "dep:base64", "dep:sha2", "dep:subtle"]
 srv = ["rfc6186"]
 rfc6186 = ["dep:serde", "dep:url", "dep:io-http"]
@@ -70,6 +70,7 @@ domain = { version = "0.12", default-features = false, features = ["alloc", "std
 io-http = { version = "0.5", default-features = false, optional = true }
 log = { version = "0.4", default-features = false }
 pimalaya-cli = { version = "0.2", default-features = false, optional = true }
+psl = { version = "2", default-features = false, features = ["helpers"], optional = true }
 pimalaya-stream = { version = "0.3", default-features = false, features = ["std"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde-xml-rs = { version = "0.8", optional = true }

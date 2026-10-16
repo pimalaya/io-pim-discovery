@@ -41,7 +41,12 @@ use thiserror::Error;
 use url::Url;
 
 #[cfg(feature = "autoconfig")]
-use crate::autoconfig::{isp::DiscoveryIsp, mailconf::DiscoveryMailconf, mx::DiscoveryDnsMx};
+use crate::autoconfig::{
+    cname::DiscoveryDnsCname,
+    isp::DiscoveryIsp,
+    mailconf::DiscoveryMailconf,
+    mx::{DiscoveryDnsMx, mx_base_domain},
+};
 #[cfg(feature = "rfc8414")]
 use crate::compose::config::DiscoveryAuthMethod;
 #[cfg(feature = "autoconfig")]
@@ -110,6 +115,7 @@ enum Mechanism {
     IspFallback,
     Mailconf,
     Ispdb,
+    MxAutoconfig,
     Srv,
     #[cfg(feature = "rfc6764")]
     Caldav,
@@ -273,7 +279,8 @@ impl DiscoveryComposeClientStd {
     }
 
     /// Runs every Mozilla autoconfig location (ISP main, ISP fallback,
-    /// ISPDB, mailconf) for `email`. Raw and unmerged.
+    /// ISPDB, mailconf, then the MX provider's) for `email`. Raw and
+    /// unmerged.
     #[cfg(feature = "autoconfig")]
     pub fn autoconfig(&self, email: &str) -> Vec<DiscoveryServiceConfig> {
         let local = email.split_once('@').map(|(local, _)| local).unwrap_or("");
@@ -284,6 +291,7 @@ impl DiscoveryComposeClientStd {
         configs.extend(self.run_isp_fallback(&domain, email));
         configs.extend(self.run_ispdb(&domain, email));
         configs.extend(self.run_mailconf(&domain, email));
+        configs.extend(self.run_mx_autoconfig(&domain, email));
         configs
     }
 
@@ -540,6 +548,7 @@ impl DiscoveryComposeClientStd {
                 Mechanism::IspFallback,
                 Mechanism::Mailconf,
                 Mechanism::Ispdb,
+                Mechanism::MxAutoconfig,
             ]);
         }
         if wants(DiscoveryService::Imap) || wants(DiscoveryService::Smtp) {
@@ -583,6 +592,7 @@ impl DiscoveryComposeClientStd {
             Mechanism::IspFallback => self.run_isp_fallback(domain, email),
             Mechanism::Mailconf => self.run_mailconf(domain, email),
             Mechanism::Ispdb => self.run_ispdb(domain, email),
+            Mechanism::MxAutoconfig => self.run_mx_autoconfig(domain, email),
             Mechanism::Srv => self.run_srv(domain),
             #[cfg(feature = "rfc6764")]
             Mechanism::Caldav => self.run_dav(domain, DiscoveryDavService::Caldav),
@@ -957,13 +967,20 @@ impl DiscoveryComposeClientStd {
 
     #[cfg(feature = "autoconfig")]
     fn run_isp_main(&self, local: &str, domain: &str, email: &str) -> Vec<DiscoveryServiceConfig> {
-        match DiscoveryIsp::main_url(local, domain, true) {
+        let configs = match DiscoveryIsp::main_url(local, domain, true) {
             Ok(url) => self.run_isp(url, email, DiscoveryConfigSource::IspMain),
             Err(err) => {
                 debug!("skip autoconfig ISP main URL");
                 trace!("{err:?}");
                 Vec::new()
             }
+        };
+
+        if configs.is_empty() {
+            let host = format!("autoconfig.{domain}");
+            self.run_isp_alias(&host, email, DiscoveryConfigSource::IspMain)
+        } else {
+            configs
         }
     }
 
@@ -1015,6 +1032,98 @@ impl DiscoveryComposeClientStd {
         }
     }
 
+    /// Fetches the autoconfig of the providers named by `domain`'s MX
+    /// records, best record first (Thunderbird's MX fallback), for
+    /// domains publishing none of their own. Each registrable MX domain
+    /// other than `domain` is tried at its ISP main URL, then at the
+    /// target of that URL's alias, then in the ISPDB; the first document
+    /// wins.
+    #[cfg(feature = "autoconfig")]
+    fn run_mx_autoconfig(&self, domain: &str, email: &str) -> Vec<DiscoveryServiceConfig> {
+        let mx = DiscoveryDnsMx::new(domain, self.dns.clone());
+        let records = match run(&mut self.pool(), mx) {
+            Ok(records) => records,
+            Err(err) => {
+                debug!("skip MX autoconfig");
+                trace!("{err:?}");
+                return Vec::new();
+            }
+        };
+
+        let mut bases: Vec<String> = Vec::new();
+        for record in records {
+            let exchange = record.rdata.exchange.to_string();
+            if let Some(base) = mx_base_domain(&exchange)
+                && base != domain
+                && !bases.contains(&base)
+            {
+                bases.push(base);
+            }
+        }
+
+        for base in bases {
+            debug!("try autoconfig of the MX provider");
+            trace!("{domain} -> {base}");
+
+            let host = format!("autoconfig.{base}");
+            if let Ok(url) = DiscoveryIsp::host_url(email, &host, true) {
+                let configs = self.run_isp(url, email, DiscoveryConfigSource::Mx);
+                if !configs.is_empty() {
+                    return configs;
+                }
+            }
+
+            let configs = self.run_isp_alias(&host, email, DiscoveryConfigSource::Mx);
+            if !configs.is_empty() {
+                return configs;
+            }
+
+            if let Ok(url) = DiscoveryIsp::db_url(&base, true) {
+                let configs = self.run_isp(url, email, DiscoveryConfigSource::Mx);
+                if !configs.is_empty() {
+                    return configs;
+                }
+            }
+        }
+
+        Vec::new()
+    }
+
+    /// Fetches the ISP main document served by the last target of
+    /// `host`'s CNAME chain, when `host` is an alias. A provider aliasing
+    /// the autoconfig of the domains it hosts to its own host rarely
+    /// holds a certificate for the alias, so the alias itself fails.
+    #[cfg(feature = "autoconfig")]
+    fn run_isp_alias(
+        &self,
+        host: &str,
+        email: &str,
+        source: DiscoveryConfigSource,
+    ) -> Vec<DiscoveryServiceConfig> {
+        let cname = DiscoveryDnsCname::new(host, self.dns.clone());
+        let target = match run(&mut self.pool(), cname) {
+            Ok(Some(target)) => target,
+            Ok(None) => return Vec::new(),
+            Err(err) => {
+                debug!("skip autoconfig alias");
+                trace!("{err:?}");
+                return Vec::new();
+            }
+        };
+
+        debug!("follow autoconfig alias");
+        trace!("{host} -> {target}");
+
+        match DiscoveryIsp::host_url(email, &target, true) {
+            Ok(url) => self.run_isp(url, email, source),
+            Err(err) => {
+                debug!("skip autoconfig alias");
+                trace!("{err:?}");
+                Vec::new()
+            }
+        }
+    }
+
     #[cfg(feature = "autoconfig")]
     fn run_isp(
         &self,
@@ -1058,6 +1167,11 @@ impl DiscoveryComposeClientStd {
 
     #[cfg(not(feature = "autoconfig"))]
     fn run_mailconf(&self, _domain: &str, _email: &str) -> Vec<DiscoveryServiceConfig> {
+        Vec::new()
+    }
+
+    #[cfg(not(feature = "autoconfig"))]
+    fn run_mx_autoconfig(&self, _domain: &str, _email: &str) -> Vec<DiscoveryServiceConfig> {
         Vec::new()
     }
 

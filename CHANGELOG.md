@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the RFC 9728 resolution of OAuth grants to every `compose_*`.
+
+  A config whose HTTP endpoint publishes protected resource metadata gets its authorization servers as issuers when it had no OAuth method, and its grants carry the resource.
+
+### Changed
+
+- **BREAKING**: Changed `DiscoveryAuthMethod::OauthAuthorizationCodeGrant` and `OauthDeviceAuthorizationGrant` to carry `resource` and `scopes_supported`.
+
+  The scopes come from the issuer metadata, or from the resource metadata when it lists any.
+
 ## [0.10.0] - 2026-11-03
 
 ### Added

@@ -88,6 +88,8 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             authorization_endpoint: GOOGLE_AUTHORIZATION_ENDPOINT.to_string(),
             token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
             scope: Some("https://mail.google.com/".to_string()),
+            resource: None,
+            scopes_supported: Vec::new(),
         },
         DiscoveryAuthMethod::Password,
     ];
@@ -97,6 +99,8 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             authorization_endpoint: GOOGLE_AUTHORIZATION_ENDPOINT.to_string(),
             token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
             scope: Some(scope.to_string()),
+            resource: None,
+            scopes_supported: Vec::new(),
         }]
     };
 
@@ -198,11 +202,15 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
                 authorization_endpoint: MICROSOFT_AUTHORIZATION_ENDPOINT.to_string(),
                 token_endpoint: MICROSOFT_TOKEN_ENDPOINT.to_string(),
                 scope: scope.clone(),
+                resource: None,
+                scopes_supported: Vec::new(),
             },
             DiscoveryAuthMethod::OauthDeviceAuthorizationGrant {
                 device_authorization_endpoint: MICROSOFT_DEVICE_AUTHORIZATION_ENDPOINT.to_string(),
                 token_endpoint: MICROSOFT_TOKEN_ENDPOINT.to_string(),
                 scope,
+                resource: None,
+                scopes_supported: Vec::new(),
             },
         ]
     };

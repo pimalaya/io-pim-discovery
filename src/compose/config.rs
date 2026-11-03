@@ -146,6 +146,61 @@ impl DiscoveryServiceConfig {
         self.auth = auth;
     }
 
+    /// Adds an issuer per authorization server the endpoint's RFC 9728
+    /// metadata names, when the config carries no OAuth method yet: the
+    /// issuer pass then resolves them into grants.
+    #[cfg(feature = "rfc9728")]
+    pub(crate) fn add_resource_issuers(&mut self, servers: &[String]) {
+        let oauth = self.auth.iter().any(|method| {
+            matches!(
+                method,
+                DiscoveryAuthMethod::OauthAuthorizationCodeGrant { .. }
+                    | DiscoveryAuthMethod::OauthDeviceAuthorizationGrant { .. }
+                    | DiscoveryAuthMethod::OauthIssuer(_)
+            )
+        });
+
+        if oauth {
+            return;
+        }
+
+        for server in servers {
+            let issuer = DiscoveryAuthMethod::OauthIssuer(server.clone());
+
+            if !self.auth.contains(&issuer) {
+                self.auth.push(issuer);
+            }
+        }
+    }
+
+    /// Binds every OAuth grant to the RFC 8707 resource the endpoint's
+    /// RFC 9728 metadata names, with the scopes it advertises when it
+    /// lists any.
+    #[cfg(feature = "rfc9728")]
+    pub(crate) fn set_oauth_resource(&mut self, resource: &str, scopes: &[String]) {
+        for method in &mut self.auth {
+            let (DiscoveryAuthMethod::OauthAuthorizationCodeGrant {
+                resource: target,
+                scopes_supported,
+                ..
+            }
+            | DiscoveryAuthMethod::OauthDeviceAuthorizationGrant {
+                resource: target,
+                scopes_supported,
+                ..
+            }) = method
+            else {
+                continue;
+            };
+
+            *target = Some(resource.to_string());
+
+            if !scopes.is_empty() {
+                *scopes_supported = scopes.to_vec();
+            }
+        }
+    }
+
     /// Flattens a Mozilla autoconfig document into one config per
     /// incoming/outgoing server. Servers without a hostname are
     /// skipped; a missing port falls back to the well-known port of
@@ -202,6 +257,8 @@ impl DiscoveryServiceConfig {
                             authorization_endpoint: oauth.auth_url.clone(),
                             token_endpoint: oauth.token_url.clone(),
                             scope: Some(oauth.scope.clone()),
+                            resource: None,
+                            scopes_supported: Vec::new(),
                         }
                     }
                     _ => continue,
@@ -577,6 +634,82 @@ mod tests {
         assert!(config.auth.contains(&DiscoveryAuthMethod::Bearer));
     }
 
+    #[cfg(feature = "rfc9728")]
+    fn jmap(auth: vec::Vec<DiscoveryAuthMethod>) -> DiscoveryServiceConfig {
+        DiscoveryServiceConfig {
+            service: DiscoveryService::Jmap,
+            endpoint: DiscoveryEndpoint::Http("https://api.example.com/jmap/session".to_string()),
+            username: None,
+            auth,
+            source: DiscoveryConfigSource::Jmap,
+            resolved: false,
+        }
+    }
+
+    #[cfg(feature = "rfc9728")]
+    #[test]
+    fn resource_servers_become_issuers_only_without_oauth() {
+        let servers = ["https://as.example.com/".to_string()];
+
+        let mut bare = jmap(vec![DiscoveryAuthMethod::Bearer]);
+        bare.add_resource_issuers(&servers);
+        assert_eq!(
+            bare.auth,
+            vec![
+                DiscoveryAuthMethod::Bearer,
+                DiscoveryAuthMethod::OauthIssuer("https://as.example.com/".to_string()),
+            ],
+        );
+
+        let issuer = DiscoveryAuthMethod::OauthIssuer("https://pacc.example.com".to_string());
+        let mut discovered = jmap(vec![issuer.clone()]);
+        discovered.add_resource_issuers(&servers);
+        assert_eq!(discovered.auth, vec![issuer]);
+    }
+
+    #[cfg(feature = "rfc9728")]
+    #[test]
+    fn resource_binds_every_grant_keeping_server_scopes_when_it_lists_none() {
+        let mut config = jmap(vec![
+            DiscoveryAuthMethod::OauthAuthorizationCodeGrant {
+                authorization_endpoint: "https://as.example.com/authorize".to_string(),
+                token_endpoint: "https://as.example.com/token".to_string(),
+                scope: None,
+                resource: None,
+                scopes_supported: vec!["openid".to_string(), "mail".to_string()],
+            },
+            DiscoveryAuthMethod::Bearer,
+        ]);
+
+        config.set_oauth_resource("https://api.example.com/jmap/session", &[]);
+        let DiscoveryAuthMethod::OauthAuthorizationCodeGrant {
+            resource,
+            scopes_supported,
+            ..
+        } = &config.auth[0]
+        else {
+            panic!("expected the grant first");
+        };
+        assert_eq!(
+            resource.as_deref(),
+            Some("https://api.example.com/jmap/session")
+        );
+        assert_eq!(scopes_supported, &["openid", "mail"]);
+
+        config.set_oauth_resource(
+            "https://api.example.com/jmap/session",
+            &["mail".to_string()],
+        );
+        let DiscoveryAuthMethod::OauthAuthorizationCodeGrant {
+            scopes_supported, ..
+        } = &config.auth[0]
+        else {
+            panic!("expected the grant first");
+        };
+        assert_eq!(scopes_supported, &["mail"]);
+        assert_eq!(config.auth[1], DiscoveryAuthMethod::Bearer);
+    }
+
     #[test]
     fn plain_and_http_endpoints_are_not_secure() {
         let config = |endpoint| DiscoveryServiceConfig {
@@ -618,6 +751,8 @@ mod tests {
                 device_authorization_endpoint: "https://example.com/device".to_string(),
                 token_endpoint: "https://example.com/token".to_string(),
                 scope: None,
+                resource: None,
+                scopes_supported: vec![],
             }],
             source: DiscoveryConfigSource::IspMain,
             resolved: false,
@@ -716,6 +851,14 @@ pub enum DiscoveryAuthMethod {
         token_endpoint: String,
         /// Space-delimited set of requested scopes, if known.
         scope: Option<String>,
+        /// The RFC 8707 resource indicator the token is meant for, when
+        /// the endpoint publishes RFC 9728 protected resource metadata.
+        #[serde(default)]
+        resource: Option<String>,
+        /// The scopes the authorization server, or the protected resource
+        /// when it publishes metadata, advertises.
+        #[serde(default)]
+        scopes_supported: Vec<String>,
     },
 
     /// OAuth 2.0 device authorization grant (RFC 8628).
@@ -726,6 +869,14 @@ pub enum DiscoveryAuthMethod {
         token_endpoint: String,
         /// Space-delimited set of requested scopes, if known.
         scope: Option<String>,
+        /// The RFC 8707 resource indicator the token is meant for, when
+        /// the endpoint publishes RFC 9728 protected resource metadata.
+        #[serde(default)]
+        resource: Option<String>,
+        /// The scopes the authorization server, or the protected resource
+        /// when it publishes metadata, advertises.
+        #[serde(default)]
+        scopes_supported: Vec<String>,
     },
 
     /// OAuth 2.0 with grant types not known yet: the issuer's RFC

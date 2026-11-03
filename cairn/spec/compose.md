@@ -23,6 +23,14 @@ The client SHALL expose `compose_all` (every reachable config), `compose_first` 
 ### Requirement: Auth refinement
 A composed config's advertised auth MAY be refined against a live `WWW-Authenticate` probe: probed schemes replace account-level claims (a password claim drops when only bearer is challenged), while an OAuth issuer is preserved.
 
+### Requirement: OAuth resolution
+Composition SHALL resolve every OAuth issuer through its RFC 8414 metadata into the grants it advertises (the authorization code grant, and the device grant when a device authorization endpoint is named), each carrying the metadata's `scopes_supported`, leaving an unresolvable issuer as it was. With `rfc9728`, it SHALL first read the protected resource metadata of each distinct HTTP endpoint: a config carrying no OAuth method SHALL gain an issuer per authorization server named, and after issuer resolution every OAuth grant of the config SHALL carry the metadata's `resource`, with its `scopes_supported` when it lists any. An endpoint without metadata SHALL leave its configs as they were.
+
+#### Scenario: A JMAP session publishing its resource metadata
+- GIVEN a JMAP config whose session URL serves RFC 9728 metadata naming an authorization server and scopes
+- WHEN composition resolves OAuth
+- THEN the config's authorization code grant carries the session URL as `resource` and the resource's scopes
+
 ### Requirement: Advertised DAV roots are resolved
 Composition SHALL probe every CalDAV or CardDAV config whose HTTP endpoint carries no path and that no RFC 6764 resolution produced, at `/.well-known/{caldav,carddav}` (RFC 6764 §5), once per origin and service, without credentials. When the probe ends on a DAV server, the config's endpoint SHALL become that context root and the config SHALL be marked resolved; otherwise it SHALL stay as advertised. `compose_raw`, `compose_all`, `compose_first` and `compose_all_within` SHALL run it, the last one within its deadline. In secure-only mode the probe SHALL NOT follow a redirect to `http://`.
 

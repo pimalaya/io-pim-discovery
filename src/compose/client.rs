@@ -51,7 +51,7 @@ use crate::autoconfig::{
 use crate::compose::config::DiscoveryAuthMethod;
 #[cfg(feature = "autoconfig")]
 use crate::compose::config::DiscoveryConfigSource;
-#[cfg(feature = "rfc6764")]
+#[cfg(any(feature = "rfc6764", feature = "rfc9728"))]
 use crate::compose::config::DiscoveryEndpoint;
 #[cfg(feature = "pacc")]
 use crate::pacc::discover::DiscoveryPacc;
@@ -245,7 +245,7 @@ impl DiscoveryComposeClientStd {
             .filter(|config| services.is_empty() || services.contains(&config.service))
             .collect();
 
-        self.resolve_issuers(&mut configs);
+        self.resolve_oauth(&mut configs);
 
         Ok(configs)
     }
@@ -394,7 +394,7 @@ impl DiscoveryComposeClientStd {
 
         let mut configs = collector.finish();
         self.probe(&mut configs);
-        self.resolve_issuers(&mut configs);
+        self.resolve_oauth(&mut configs);
 
         debug!("end of config compose");
         trace!("{configs:?}");
@@ -666,6 +666,71 @@ impl DiscoveryComposeClientStd {
     #[cfg(not(feature = "rfc8414"))]
     fn resolve_issuers(&self, _configs: &mut [DiscoveryServiceConfig]) {}
 
+    /// Resolves the OAuth issuers of `configs` with the RFC 9728
+    /// protected resource metadata of their HTTP endpoints: a config
+    /// without OAuth gains the authorization servers the metadata
+    /// names, then every OAuth grant is bound to the resource and its
+    /// advertised scopes. Each distinct endpoint is fetched once, in
+    /// parallel; one without metadata leaves its configs as they were.
+    #[cfg(feature = "rfc9728")]
+    fn resolve_oauth(&self, configs: &mut [DiscoveryServiceConfig]) {
+        let urls: BTreeSet<String> = configs
+            .iter()
+            .filter_map(|config| match &config.endpoint {
+                DiscoveryEndpoint::Http(url) => Some(url.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let resources: BTreeMap<String, DiscoveryOauthResourceMetadata> = thread::scope(|scope| {
+            let handles: Vec<_> = urls
+                .iter()
+                .filter_map(|raw| Some((raw, Url::parse(raw).ok()?)))
+                .map(|(raw, url)| {
+                    scope.spawn(move || Some((raw.clone(), self.oauth_resource(&url)?)))
+                })
+                .collect();
+
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok().flatten())
+                .collect()
+        });
+
+        let resource_of = |config: &DiscoveryServiceConfig| match &config.endpoint {
+            DiscoveryEndpoint::Http(url) => resources.get(url),
+            _ => None,
+        };
+
+        for config in configs.iter_mut() {
+            if let Some(metadata) = resource_of(config) {
+                let servers: Vec<String> = metadata
+                    .authorization_servers
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+
+                config.add_resource_issuers(&servers);
+            }
+        }
+
+        self.resolve_issuers(configs);
+
+        for config in configs.iter_mut() {
+            if let Some(metadata) = resource_of(config) {
+                let resource = metadata.resource.to_string();
+                config.set_oauth_resource(&resource, &metadata.scopes_supported);
+            }
+        }
+    }
+
+    /// Without RFC 9728, OAuth resolution is the RFC 8414 issuer pass
+    /// alone.
+    #[cfg(not(feature = "rfc9728"))]
+    fn resolve_oauth(&self, configs: &mut [DiscoveryServiceConfig]) {
+        self.resolve_issuers(configs);
+    }
+
     /// Resolves one issuer to the grants its RFC 8414 metadata
     /// advertises (authorization code grant, plus device grant when
     /// the metadata names a device authorization endpoint). Falls back
@@ -693,6 +758,8 @@ impl DiscoveryComposeClientStd {
                 authorization_endpoint: authorization.to_string(),
                 token_endpoint: token.to_string(),
                 scope: None,
+                resource: None,
+                scopes_supported: metadata.scopes_supported.clone(),
             });
         }
 
@@ -704,6 +771,8 @@ impl DiscoveryComposeClientStd {
                 device_authorization_endpoint: device.to_string(),
                 token_endpoint: token.to_string(),
                 scope: None,
+                resource: None,
+                scopes_supported: metadata.scopes_supported.clone(),
             });
         }
 

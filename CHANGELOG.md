@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Raised the minimum supported Rust version from 1.88 to 1.89.
 
+- Changed the PACC digest decoding from base64 to base64-codec.
+
+  The CLI installs the detected CPU token (simd-cpu) first thing, so every base64 codec it runs uses SIMD.
+
 ### Removed
 
 - Removed `mx_parent_domain`, replaced by `mx_base_domain`: stripping one label left `mx.flatmail.com` for `migadu-48722629.mx.flatmail.com`, and could reach the parent of a public suffix (`autoconfig.co.uk`), open to registration. **Breaking.**

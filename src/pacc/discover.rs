@@ -34,7 +34,7 @@ use alloc::{
     vec::Vec,
 };
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use base64_codec::codec::Base64Codec;
 use log::trace;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -194,16 +194,18 @@ impl DiscoveryCoroutine for DiscoveryPacc {
                                 continue;
                             }
 
-                            let expected_digest = match BASE64.decode(d) {
-                                Ok(digest) => {
-                                    trace!("expected digest: {digest:x?}");
-                                    digest
-                                }
-                                Err(err) => {
-                                    trace!("invalid base64 digest `{d}`, skip: {err}");
-                                    continue;
-                                }
-                            };
+                            // NOTE: the codec decodes leniently and never
+                            // fails, so a digest not read clean is refused
+                            // here; a wrong length fails the comparison.
+                            let mut expected_digest = Vec::new();
+                            let codec = Base64Codec::default();
+
+                            if !codec.decode_vec(d.as_bytes(), &mut expected_digest) {
+                                trace!("invalid base64 digest `{d}`, skip");
+                                continue;
+                            }
+
+                            trace!("expected digest: {expected_digest:x?}");
 
                             let actual_digest = Sha256::digest(&self.raw_body);
                             trace!("actual digest: {actual_digest:x?}");

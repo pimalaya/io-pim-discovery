@@ -29,8 +29,13 @@ use pimalaya_cli::{
     printer::{Printer, StdoutPrinter},
 };
 use pimalaya_stream::tls::{Rustls, RustlsCrypto, Tls, TlsProvider};
+use simd_cpu::SimdCpu;
 
 fn main() {
+    // NOTE: every base64 codec built afterwards (the PACC digest, io-http)
+    // runs the installed CPU token, the portable baseline when none is.
+    let _ = SimdCpu::install_detected();
+
     let cli = Cli::parse();
 
     Logger::try_init(&cli.log).expect("init logger");

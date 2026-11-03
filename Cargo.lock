@@ -97,12 +97,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "base64"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
-
-[[package]]
 name = "base64-codec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,7 +715,7 @@ name = "io-pim-discovery"
 version = "0.9.0"
 dependencies = [
  "anyhow",
- "base64",
+ "base64-codec",
  "clap",
  "domain",
  "env_logger",
@@ -736,6 +730,7 @@ dependencies = [
  "serde-xml-rs",
  "serde_json",
  "sha2",
+ "simd-cpu",
  "subtle",
  "thiserror",
  "url",
@@ -1089,12 +1084,12 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pimalaya-cli"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fe9eda0c6d281d896f4bbb0e88fa2b88f5ae3bfc8daab083de922959e5d549f"
+checksum = "dba4dd3812ec9810b5d8d353d1fb965c33b00d5356e61cae622884f9a8ac44b2"
 dependencies = [
  "anyhow",
- "base64",
+ "base64-codec",
  "clap",
  "clap_complete",
  "clap_mangen",

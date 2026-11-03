@@ -25,7 +25,3 @@ cargo build --no-default-features --features rfc6764,client # a mechanism plus t
 cargo build --features cli                                  # the full CLI binary
 cargo build --all-features                                  # everything
 ```
-
-## Vendored domain patch
-
-The `domain` DNS crate is pinned to a git revision through `[patch.crates-io]` until its new API is released on crates.io; do not drop that patch. The same section path-patches `pimalaya-cli` until its 0.1 release.

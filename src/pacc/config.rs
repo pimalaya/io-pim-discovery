@@ -220,10 +220,10 @@ impl fmt::Display for DiscoveryPaccConfig {
                 if let Some(d) = &help.developer {
                     writeln!(f, "  {:15}{d}", "Developer")?;
                 }
-                if let Some(c) = &help.contact {
-                    if !c.is_empty() {
-                        writeln!(f, "  {:15}{}", "Contact", c.join(", "))?;
-                    }
+                if let Some(c) = &help.contact
+                    && !c.is_empty()
+                {
+                    writeln!(f, "  {:15}{}", "Contact", c.join(", "))?;
                 }
             }
         }

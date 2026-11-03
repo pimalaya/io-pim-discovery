@@ -3,7 +3,7 @@ name = "io-pim-discovery"
 description = "PIM discovery CLI and client library for Rust"
 version = "0.9.0"
 authors = ["Clément DOUIN (soywod) <pimalaya.org@posteo.net>"]
-rust-version = "1.88"
+rust-version = "1.89"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 categories = ["network-programming", "no-std"]
@@ -56,7 +56,7 @@ path = "examples/pacc_client.rs"
 required-features = ["pacc", "client"]
 
 [build-dependencies]
-pimalaya-cli = { version = "0.2", default-features = false, features = ["build"], optional = true }
+pimalaya-cli = { version = "0.3", default-features = false, features = ["build"], optional = true }
 
 [dev-dependencies]
 env_logger = "0.11"
@@ -67,9 +67,9 @@ anyhow = { version = "1", default-features = false, optional = true }
 base64 = { version = "0.23", default-features = false, features = ["alloc"], optional = true }
 clap = { version = "4.4", features = ["derive", "wrap_help"], optional = true }
 domain = { version = "0.12", default-features = false, features = ["alloc", "std", "unstable-new"] }
-io-http = { version = "0.5", default-features = false, optional = true }
+io-http = { version = "0.6", default-features = false, optional = true }
 log = { version = "0.4", default-features = false }
-pimalaya-cli = { version = "0.2", default-features = false, optional = true }
+pimalaya-cli = { version = "0.3", default-features = false, optional = true }
 psl = { version = "2", default-features = false, features = ["helpers"], optional = true }
 pimalaya-stream = { version = "0.3", default-features = false, features = ["std"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -85,7 +85,3 @@ resolv-conf = { version = "0.7", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 ipconfig = { version = "0.3", optional = true }
-
-[patch.crates-io]
-# NOTE: unreleased fixes, to be replaced by released versions.
-io-http = { git = "https://github.com/pimalaya/io-http", rev = "e1815307771c1ec65a86b77256d46c33241d3038" }

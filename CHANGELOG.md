@@ -30,13 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Changed secure-only mode to refuse a plain `http://` DNS resolver, with an error, before any request.
 
+- Raised the minimum supported Rust version from 1.88 to 1.89.
+
 ### Removed
 
 - Removed `mx_parent_domain`, replaced by `mx_base_domain`: stripping one label left `mx.flatmail.com` for `migadu-48722629.mx.flatmail.com`, and could reach the parent of a public suffix (`autoconfig.co.uk`), open to registration. **Breaking.**
 
 ### Fixed
 
-- Fixed a discovery probe buffering whatever a host sent, and spinning forever on a connection closed mid-body. io-http is pinned to an unreleased fix (e181530) that caps response heads at 64 KiB and bodies at 256 MiB, fails on a body cut short, and no longer panics on a hostile chunk size.
+- Fixed a discovery probe buffering whatever a host sent, and spinning forever on a connection closed mid-body. io-http 0.6 caps response heads at 64 KiB and bodies at 256 MiB, fails on a body cut short, and no longer panics on a hostile chunk size.
 
 ## [0.9.0] - 2026-10-04
 

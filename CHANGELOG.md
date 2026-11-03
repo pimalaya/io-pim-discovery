@@ -7,42 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-03
+
 ### Added
 
-- Added the resolution of advertised CalDAV and CardDAV roots. A config whose endpoint has no path, from a source other than the RFC 6764 walk (PACC, autoconfig, a provider rule), is probed at `/.well-known/{caldav,carddav}` (RFC 6764 §5) by every `compose_*`. A probe ending on a DAV server replaces the endpoint with that context root. Fastmail advertises bare hosts whose `/` answers 404: they now come out as `https://carddav.fastmail.com/dav/addressbooks` and `https://caldav.fastmail.com/dav/calendars`.
+- Added the resolution of advertised CalDAV and CardDAV roots through their well-known URI (RFC 6764 §5).
 
-- Added `resolved` to `DiscoveryServiceConfig`, serialized as `resolved`: true when the endpoint came out of an RFC 6764 resolution. **Breaking** for code building the struct literally.
+  A config with no endpoint path, from PACC, autoconfig or a provider rule, gets its DAV context root, such as `https://caldav.fastmail.com/dav/calendars`.
 
-- Added Thunderbird's MX fallback for domains publishing no autoconfig of their own: the registrable domain of each MX host (Public Suffix List, so never a public suffix's parent) is tried at its ISP main URL, then in the ISPDB. Its configs are tagged with the new `DiscoveryConfigSource::Mx`, serialized as `mx`. **Breaking** for exhaustive matches.
+- Added the MX provider fallback to autoconfig.
 
-- Added CNAME following to the ISP main URL: when `autoconfig.<domain>` fails and is an alias, the target of its chain is fetched instead, since a provider aliasing its customers' autoconfig to its own host rarely holds a certificate for the alias. A domain hosted at Migadu (MX at `flatmail.com`, whose autoconfig host serves a certificate for `admin.migadu.com` only) now discovers `imap.migadu.com` and `smtp.migadu.com`.
+  A domain without an autoconfig of its own is tried at the registrable domain of its MX hosts, ISP main URL then ISPDB.
 
-- Added `DiscoveryDnsCname`, `DiscoveryIsp::host_url` and `mx_base_domain`, the bricks of both.
+- Added CNAME following to the autoconfig ISP main URL.
+
+  A failing `autoconfig.<domain>` alias is retried on its target, so a domain hosted at Migadu discovers `imap.migadu.com`.
+
+- Added `DiscoveryDnsCname`, the CNAME chain lookup.
+- Added `DiscoveryIsp::host_url`.
+- Added `mx_base_domain`, the registrable domain of an MX host.
 
 ### Changed
 
-- Changed the reduction of `compose_all` and `compose_first` to keep a resolved endpoint over an unresolved one when it merges a subdomain with its parent host. Before, the parent host always won, so an advertised bare origin hid the shard the RFC 6764 walk had resolved.
+- **BREAKING**: Changed `DiscoveryServiceConfig` to carry `resolved`, true when an RFC 6764 resolution produced the endpoint.
+- **BREAKING**: Changed `DiscoveryConfigSource` to carry `Mx`, serialized as `mx`.
+- **BREAKING**: Changed a DNS resolver that does not answer into an error.
 
+  Every `compose_*` and CLI command first runs `check_resolver`: no answer, `SERVFAIL`, `REFUSED` or a DNS-over-HTTPS HTTP error fails, naming the resolver. `NXDOMAIN` is still an answer.
 
-- Changed a DNS resolver that does not answer into an error. **Breaking.**
+- Changed `compose_all` and `compose_first` to keep a resolved endpoint over an unresolved one when merging a subdomain with its parent host.
+- Changed secure-only mode to refuse a plain `http://` DNS resolver.
+- Changed the minimum Rust version to 1.89.
+- Replaced the base64 crate with [base64-codec](https://crates.io/crates/base64-codec) for the PACC digest.
 
-  Discovery first asks the resolver about the address's domain (`check_resolver`, run by every `compose_*` and every CLI command). No answer, or a failing response code (`SERVFAIL`, `REFUSED`, an HTTP error from a DNS-over-HTTPS resolver), is now an error naming the resolver, where it gave an empty or partial list with exit 0. `NXDOMAIN` is still an answer.
+  The CLI installs the detected CPU token first, so its base64 runs on SIMD.
 
-- Changed secure-only mode to refuse a plain `http://` DNS resolver, with an error, before any request.
-
-- Raised the minimum supported Rust version from 1.88 to 1.89.
-
-- Changed the PACC digest decoding from base64 to base64-codec.
-
-  The CLI installs the detected CPU token (simd-cpu) first thing, so every base64 codec it runs uses SIMD.
+- Changed the io-http requirement to 0.6.
+- Changed the pimalaya-cli requirement to 0.3.
 
 ### Removed
 
-- Removed `mx_parent_domain`, replaced by `mx_base_domain`: stripping one label left `mx.flatmail.com` for `migadu-48722629.mx.flatmail.com`, and could reach the parent of a public suffix (`autoconfig.co.uk`), open to registration. **Breaking.**
+- **BREAKING**: Removed `mx_parent_domain`, replaced by `mx_base_domain`.
+
+  It could reach the parent of a public suffix, such as `autoconfig.co.uk`.
 
 ### Fixed
 
-- Fixed a discovery probe buffering whatever a host sent, and spinning forever on a connection closed mid-body. io-http 0.6 caps response heads at 64 KiB and bodies at 256 MiB, fails on a body cut short, and no longer panics on a hostile chunk size.
+- Fixed discovery probes reading unbounded responses and spinning on a connection closed mid-body.
+
+  io-http 0.6 caps response heads at 64 KiB and bodies at 256 MiB.
+
+### Security
+
+- Raised the pimalaya-stream requirement to 0.3.1, fixing RUSTSEC-2026-0346 to RUSTSEC-2026-0349.
+
+  It requires rustls 0.23.46.
 
 ## [0.9.0] - 2026-10-04
 
@@ -250,7 +269,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added CLI (requires `cli` feature).
 
-[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.9.0..HEAD
+[unreleased]: https://github.com/pimalaya/io-pim-discovery/compare/v0.10.0..HEAD
+[0.10.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.9.0..v0.10.0
 [0.9.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.8.0..v0.9.0
 [0.8.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.7.0..v0.8.0
 [0.7.0]: https://github.com/pimalaya/io-pim-discovery/compare/v0.6.0..v0.7.0

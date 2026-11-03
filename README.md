@@ -24,17 +24,13 @@ This project is composed of 3 feature-gated layers:
 
 ## Features
 
-- **Email discovery**: find a domain's incoming and outgoing mail servers through Mozilla autoconfig, the Thunderbird ISPDB, DNS SRV records, DNS TXT redirects and PACC well-known configuration.
-- **Calendar and contacts discovery**: locate a domain's CalDAV and CardDAV home through DNS SRV, DNS TXT context lookups and well-known probes.
-- **JMAP discovery**: resolve a domain to its JMAP session URL through DNS SRV and the well-known session probe.
-- **Authentication discovery**: probe a URL's authentication schemes and fetch a provider's OAuth 2.0 authorization-server and protected-resource metadata to learn where and how to obtain tokens.
-- **Unified compose**: from a single email address, chain the known-provider rules and every enabled mechanism into one ranked list of service configurations, either collecting all of them or stopping at the first match.
-- **DNS over HTTPS**: every DNS lookup accepts an HTTPS resolver so discovery works on networks that block plain DNS.
-- **JSON output**: machine-readable results from the CLI with a single flag.
-- **TLS** support:
-  - [Rustls](https://crates.io/crates/rustls) with ring crypto (requires `rustls-ring` feature, enabled by default)
-  - [Rustls](https://crates.io/crates/rustls) with aws crypto (requires `rustls-aws` feature)
-  - [Native TLS](https://crates.io/crates/native-tls) (requires `native-tls` feature)
+- **I/O-free coroutines**: no_std state machines, usable from any blocking or async runtime.
+- **Email discovery**: IMAP, POP3 and SMTP servers through autoconfig, the ISPDB, DNS SRV and PACC.
+- **Calendar and contacts discovery**: CalDAV and CardDAV context roots through DNS SRV and well-known URIs.
+- **JMAP discovery**: the session URL through DNS SRV and the well-known URI.
+- **Authentication discovery**: a URL's auth schemes and its OAuth 2.0 server metadata.
+- **Unified compose**: every mechanism from one email address, in one ranked list.
+- **CLI**: `pim-discovery`, with TLS via Rustls (`rustls-ring` default, `rustls-aws`) or Native TLS (`native-tls`).
 
 > [!TIP]
 > io-pim-discovery is written in [Rust](https://www.rust-lang.org/) and uses [cargo features](https://doc.rust-lang.org/cargo/reference/features.html) to gate each mechanism. The default feature set is declared in [Cargo.toml](./Cargo.toml) or on [docs.rs](https://docs.rs/crate/io-pim-discovery/latest/features).

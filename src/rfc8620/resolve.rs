@@ -56,9 +56,19 @@ pub enum DiscoveryJmapResolveError {
     NotFound(Url),
 }
 
+/// The session resource found by a [`DiscoveryJmapResolve`].
+#[derive(Clone, Debug)]
+pub struct DiscoveryJmapResolveOutput {
+    /// The JMAP Session resource.
+    pub session: DiscoveryJmapSessionResource,
+    /// Whether an SRV record named the origin, not the domain itself.
+    pub srv: bool,
+}
+
 /// I/O-free `domain -> JMAP session resource` resolver.
 pub struct DiscoveryJmapResolve {
     domain: String,
+    srv: bool,
     state: State,
 }
 
@@ -72,6 +82,7 @@ impl DiscoveryJmapResolve {
 
         Self {
             domain,
+            srv: false,
             state: State::Srv(Box::new(srv)),
         }
     }
@@ -90,8 +101,10 @@ impl DiscoveryJmapResolve {
         srv: Option<(String, u16)>,
     ) -> DiscoveryCoroutineState<
         DiscoveryYield,
-        Result<DiscoveryJmapSessionResource, DiscoveryJmapResolveError>,
+        Result<DiscoveryJmapResolveOutput, DiscoveryJmapResolveError>,
     > {
+        self.srv = srv.is_some();
+
         let origin = match self.origin(srv) {
             Ok(origin) => origin,
             Err(err) => return DiscoveryCoroutineState::Complete(Err(err)),
@@ -105,7 +118,7 @@ impl DiscoveryJmapResolve {
 
 impl DiscoveryCoroutine for DiscoveryJmapResolve {
     type Yield = DiscoveryYield;
-    type Return = Result<DiscoveryJmapSessionResource, DiscoveryJmapResolveError>;
+    type Return = Result<DiscoveryJmapResolveOutput, DiscoveryJmapResolveError>;
 
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
         match mem::take(&mut self.state) {
@@ -137,7 +150,9 @@ impl DiscoveryCoroutine for DiscoveryJmapResolve {
             },
             State::DiscoveryWellKnown { mut probe, origin } => match probe.resume(arg) {
                 DiscoveryCoroutineState::Complete(Ok(Some(session))) => {
-                    DiscoveryCoroutineState::Complete(Ok(session))
+                    let srv = self.srv;
+                    let output = DiscoveryJmapResolveOutput { session, srv };
+                    DiscoveryCoroutineState::Complete(Ok(output))
                 }
                 DiscoveryCoroutineState::Complete(Ok(None)) => DiscoveryCoroutineState::Complete(
                     Err(DiscoveryJmapResolveError::NotFound(origin)),
@@ -164,4 +179,78 @@ enum State {
     },
     #[default]
     Done,
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use url::Url;
+
+    use crate::{
+        coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
+        rfc8620::resolve::{DiscoveryJmapResolve, DiscoveryJmapResolveOutput},
+    };
+
+    /// A DNS-over-TCP answer: one SRV record naming `target` on port
+    /// 443, or no record.
+    fn srv_reply(target: Option<&str>) -> Vec<u8> {
+        let count = u8::from(target.is_some());
+        let mut message = vec![0, 1, 0x81, 0x80, 0, 0, 0, count, 0, 0, 0, 0];
+
+        if let Some(target) = target {
+            let mut rdata = vec![0, 0, 0, 1, 0x01, 0xBB];
+            for label in target.split('.') {
+                rdata.push(label.len() as u8);
+                rdata.extend(label.as_bytes());
+            }
+            rdata.push(0);
+
+            message.extend([0, 0, 33, 0, 1, 0, 0, 0, 60, 0, rdata.len() as u8]);
+            message.extend(rdata);
+        }
+
+        let mut reply = (message.len() as u16).to_be_bytes().to_vec();
+        reply.extend(message);
+        reply
+    }
+
+    /// Resolves JMAP on `example.com`, answering the SRV lookup with
+    /// `srv` then the session probe with a challenged 401.
+    fn resolve(srv: Vec<u8>) -> DiscoveryJmapResolveOutput {
+        let resolver = Url::parse("tcp://1.1.1.1:53").unwrap();
+        let mut resolve = DiscoveryJmapResolve::new("example.com", resolver);
+
+        let challenge =
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer\r\nContent-Length: 0\r\n\r\n";
+        let mut replies = [srv.as_slice(), challenge.as_slice()].into_iter();
+        let mut arg = None;
+
+        loop {
+            match resolve.resume(arg.take()) {
+                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite { .. }) => {}
+                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead { .. }) => {
+                    arg = Some(replies.next().expect("a reply for every read"));
+                }
+                DiscoveryCoroutineState::Complete(res) => return res.unwrap(),
+            }
+        }
+    }
+
+    #[test]
+    fn the_output_tells_whether_an_srv_record_named_the_origin() {
+        let output = resolve(srv_reply(None));
+        assert_eq!(
+            output.session.url.as_str(),
+            "https://example.com/.well-known/jmap"
+        );
+        assert!(!output.srv);
+
+        let output = resolve(srv_reply(Some("jmap.example.net")));
+        assert_eq!(
+            output.session.url.as_str(),
+            "https://jmap.example.net/.well-known/jmap"
+        );
+        assert!(output.srv);
+    }
 }

@@ -16,8 +16,8 @@ use crate::{
     compose::{
         client::DiscoveryComposeClientStd,
         config::{
-            DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoverySecurity,
-            DiscoveryService, DiscoveryServiceConfig,
+            DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryConfigTrust, DiscoveryEndpoint,
+            DiscoverySecurity, DiscoveryService, DiscoveryServiceConfig,
         },
         providers::DiscoveryKnownProvider,
     },
@@ -112,8 +112,8 @@ impl fmt::Display for ConfigsOutput {
     }
 }
 
-/// Renders a service-config table: SERVICE, ENDPOINT, USERNAME, AUTH
-/// and the SOURCE mechanism that produced each row.
+/// Renders a service-config table: SERVICE, ENDPOINT, USERNAME, AUTH,
+/// the SOURCE mechanism that produced each row and its TRUST.
 pub fn table(configs: &[DiscoveryServiceConfig]) -> Table {
     let mut table = Table::new();
 
@@ -126,6 +126,7 @@ pub fn table(configs: &[DiscoveryServiceConfig]) -> Table {
             Cell::new("USERNAME"),
             Cell::new("AUTH"),
             Cell::new("SOURCE"),
+            Cell::new("TRUST"),
         ]);
 
     for config in configs {
@@ -135,6 +136,7 @@ pub fn table(configs: &[DiscoveryServiceConfig]) -> Table {
             Cell::new(config.username.as_deref().unwrap_or("-")),
             Cell::new(auth_label(&config.auth)),
             Cell::new(source_name(config.source)),
+            Cell::new(trust_name(config.trust)),
         ]);
     }
 
@@ -214,5 +216,14 @@ fn source_name(source: DiscoveryConfigSource) -> &'static str {
         DiscoveryConfigSource::Srv => "srv",
         DiscoveryConfigSource::Dav => "dav",
         DiscoveryConfigSource::Jmap => "jmap",
+    }
+}
+
+fn trust_name(trust: DiscoveryConfigTrust) -> &'static str {
+    match trust {
+        DiscoveryConfigTrust::Rule => "rule",
+        DiscoveryConfigTrust::Domain => "domain",
+        DiscoveryConfigTrust::ThirdParty => "third-party",
+        DiscoveryConfigTrust::Unauthenticated => "unauthenticated",
     }
 }

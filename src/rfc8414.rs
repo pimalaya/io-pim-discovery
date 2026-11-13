@@ -152,6 +152,12 @@ pub enum DiscoveryOauthServerResolveError {
         /// HTTP status code returned.
         code: u16,
     },
+    /// The metadata names this issuer, not the one asked.
+    #[error("Server metadata names another issuer {0}")]
+    Issuer(Url),
+    /// The metadata URL, the issuer or an endpoint is not `https`.
+    #[error("Server metadata URL {0} is not https")]
+    NotHttps(Url),
 }
 
 /// I/O-free coroutine that GETs an authorization server's well-known
@@ -161,18 +167,25 @@ pub enum DiscoveryOauthServerResolveError {
 /// Discovery document) and parses the JSON metadata. Yields its target
 /// URL on every step so the std client routes bytes through the
 /// matching HTTPS stream.
+///
+/// The document is refused unless it names the issuer asked and every
+/// URL involved is `https`.
+///
+/// Refs: <https://datatracker.ietf.org/doc/html/rfc8414#section-3.3>
 pub struct DiscoveryOauthServerResolve {
     target: Url,
+    issuer: Url,
     send: Http11Send,
 }
 
 impl DiscoveryOauthServerResolve {
-    /// Builds a coroutine fetching the metadata document at `url`.
-    pub fn new(url: Url) -> Self {
+    /// Builds a coroutine fetching the metadata of `issuer` at `url`.
+    pub fn new(url: Url, issuer: Url) -> Self {
         let request = HttpRequest::get(url.clone()).header("Accept", "application/json");
 
         Self {
             target: url,
+            issuer,
             send: Http11Send::new(request),
         }
     }
@@ -183,14 +196,47 @@ impl DiscoveryCoroutine for DiscoveryOauthServerResolve {
     type Return = Result<DiscoveryOauthServerMetadata, DiscoveryOauthServerResolveError>;
 
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
+        if self.target.scheme() != "https" {
+            let err = DiscoveryOauthServerResolveError::NotHttps(self.target.clone());
+            return DiscoveryCoroutineState::Complete(Err(err));
+        }
+
         match self.send.resume(arg) {
             HttpCoroutineState::Complete(Ok(HttpSendOutput { response, .. }))
                 if response.status.is_success() =>
             {
-                match DiscoveryOauthServerMetadata::try_from(response.body.as_slice()) {
-                    Ok(metadata) => DiscoveryCoroutineState::Complete(Ok(metadata)),
-                    Err(err) => DiscoveryCoroutineState::Complete(Err(err.into())),
+                let metadata =
+                    match DiscoveryOauthServerMetadata::try_from(response.body.as_slice()) {
+                        Ok(metadata) => metadata,
+                        Err(err) => return DiscoveryCoroutineState::Complete(Err(err.into())),
+                    };
+
+                if metadata.issuer != self.issuer {
+                    let err = DiscoveryOauthServerResolveError::Issuer(metadata.issuer);
+                    return DiscoveryCoroutineState::Complete(Err(err));
                 }
+
+                let urls = [
+                    Some(&metadata.issuer),
+                    metadata.authorization_endpoint.as_ref(),
+                    metadata.token_endpoint.as_ref(),
+                    metadata.jwks_uri.as_ref(),
+                    metadata.registration_endpoint.as_ref(),
+                    metadata.revocation_endpoint.as_ref(),
+                    metadata.introspection_endpoint.as_ref(),
+                    metadata.device_authorization_endpoint.as_ref(),
+                ];
+
+                if let Some(url) = urls
+                    .into_iter()
+                    .flatten()
+                    .find(|url| url.scheme() != "https")
+                {
+                    let err = DiscoveryOauthServerResolveError::NotHttps(url.clone());
+                    return DiscoveryCoroutineState::Complete(Err(err));
+                }
+
+                DiscoveryCoroutineState::Complete(Ok(metadata))
             }
             HttpCoroutineState::Complete(Ok(HttpSendOutput { response, .. })) => {
                 DiscoveryCoroutineState::Complete(Err(DiscoveryOauthServerResolveError::Status {
@@ -223,9 +269,94 @@ impl DiscoveryCoroutine for DiscoveryOauthServerResolve {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+
     use url::Url;
 
-    use crate::rfc8414::DiscoveryOauthServerMetadata;
+    use crate::{
+        coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
+        rfc8414::{
+            DiscoveryOauthServerMetadata, DiscoveryOauthServerResolve,
+            DiscoveryOauthServerResolveError,
+        },
+    };
+
+    /// Resolves `issuer` at its well-known URL, answered with `body`.
+    fn resolve(
+        issuer: &str,
+        body: &str,
+    ) -> Result<DiscoveryOauthServerMetadata, DiscoveryOauthServerResolveError> {
+        let issuer: Url = issuer.parse().unwrap();
+        let url = DiscoveryOauthServerMetadata::well_known_url(&issuer);
+        let mut resolve = DiscoveryOauthServerResolve::new(url, issuer);
+
+        let DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite { .. }) =
+            resolve.resume(None)
+        else {
+            panic!("expected a request to be written");
+        };
+        let DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead { .. }) =
+            resolve.resume(None)
+        else {
+            panic!("expected the response to be read");
+        };
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let DiscoveryCoroutineState::Complete(res) = resolve.resume(Some(reply.as_bytes())) else {
+            panic!("expected the resolve to complete");
+        };
+
+        res
+    }
+
+    #[test]
+    fn metadata_is_used_only_when_it_names_the_issuer_asked() {
+        let body = r#"{
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "https://as.example.com/token"
+        }"#;
+
+        let metadata = resolve("https://as.example.com", body).unwrap();
+        assert_eq!(metadata.issuer.as_str(), "https://as.example.com/");
+
+        let err = resolve("https://mail.example.org", body).unwrap_err();
+        assert!(
+            matches!(err, DiscoveryOauthServerResolveError::Issuer(_)),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn metadata_naming_a_cleartext_endpoint_is_refused() {
+        let body = r#"{
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "http://as.example.com/token"
+        }"#;
+
+        let err = resolve("https://as.example.com", body).unwrap_err();
+        assert!(
+            matches!(err, DiscoveryOauthServerResolveError::NotHttps(_)),
+            "{err}"
+        );
+
+        let issuer: Url = "http://as.example.com".parse().unwrap();
+        let url = DiscoveryOauthServerMetadata::well_known_url(&issuer);
+        let mut cleartext = DiscoveryOauthServerResolve::new(url, issuer);
+        assert!(
+            matches!(
+                cleartext.resume(None),
+                DiscoveryCoroutineState::Complete(Err(DiscoveryOauthServerResolveError::NotHttps(
+                    _
+                )))
+            ),
+            "no request leaves for a cleartext issuer"
+        );
+    }
 
     #[test]
     fn well_known_urls_follow_the_transformation_rules() {

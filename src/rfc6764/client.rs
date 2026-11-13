@@ -154,7 +154,9 @@ impl DiscoveryWebdavClientStd {
         trace!("domain: {domain}, service: {service:?}");
 
         let coroutine = DiscoveryDavResolve::new(domain, service, self.dns.clone());
-        self.run(coroutine)
+        let output = self.run(coroutine)?;
+
+        Ok(output.root)
     }
 
     /// Probes `.well-known/{service}` on `origin` (a scheme + host +

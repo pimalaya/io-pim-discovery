@@ -12,8 +12,8 @@ use alloc::{format, string::ToString, vec::Vec};
 use serde::{Deserialize, Serialize};
 
 use crate::compose::config::{
-    DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoverySecurity,
-    DiscoveryService, DiscoveryServiceConfig,
+    DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryConfigTrust, DiscoveryEndpoint,
+    DiscoverySecurity, DiscoveryService, DiscoveryServiceConfig,
 };
 
 /// A provider covered by a fixed rule.
@@ -67,16 +67,18 @@ impl DiscoveryKnownProvider {
         None
     }
 
-    /// Returns the fixed configs for `email` on this provider.
-    pub fn configs(self, email: &str) -> Vec<DiscoveryServiceConfig> {
+    /// Returns the fixed configs for `email` on this provider. `trust`
+    /// tells what vouched for the match: the rule on the domain itself,
+    /// or nothing for a match on an MX record.
+    pub fn configs(self, email: &str, trust: DiscoveryConfigTrust) -> Vec<DiscoveryServiceConfig> {
         match self {
-            Self::Google => google_configs(email),
-            Self::Microsoft => microsoft_configs(email),
+            Self::Google => google_configs(email, trust),
+            Self::Microsoft => microsoft_configs(email, trust),
         }
     }
 }
 
-fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
+fn google_configs(email: &str, trust: DiscoveryConfigTrust) -> Vec<DiscoveryServiceConfig> {
     let source = DiscoveryConfigSource::Provider(DiscoveryKnownProvider::Google);
 
     // NOTE: no device authorization grant: Google's device flow
@@ -111,6 +113,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
         auth: oauth(scope),
         source,
         resolved: false,
+        trust,
     };
 
     vec![
@@ -125,6 +128,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: mail_auth.clone(),
             source,
             resolved: false,
+            trust,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Pop3,
@@ -137,6 +141,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: mail_auth.clone(),
             source,
             resolved: false,
+            trust,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Smtp,
@@ -149,6 +154,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: mail_auth,
             source,
             resolved: false,
+            trust,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Caldav,
@@ -159,6 +165,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: oauth("https://www.googleapis.com/auth/calendar"),
             source,
             resolved: false,
+            trust,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Carddav,
@@ -169,6 +176,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: oauth("https://www.googleapis.com/auth/carddav"),
             source,
             resolved: false,
+            trust,
         },
         api(
             DiscoveryService::Gmail,
@@ -188,7 +196,7 @@ fn google_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
     ]
 }
 
-fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
+fn microsoft_configs(email: &str, trust: DiscoveryConfigTrust) -> Vec<DiscoveryServiceConfig> {
     let source = DiscoveryConfigSource::Provider(DiscoveryKnownProvider::Microsoft);
 
     // NOTE: no password: Exchange Online retired basic
@@ -222,6 +230,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
         auth: auth(scope),
         source,
         resolved: false,
+        trust,
     };
 
     vec![
@@ -236,6 +245,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: auth("https://outlook.office.com/IMAP.AccessAsUser.All"),
             source,
             resolved: false,
+            trust,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Pop3,
@@ -248,6 +258,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: auth("https://outlook.office.com/POP.AccessAsUser.All"),
             source,
             resolved: false,
+            trust,
         },
         DiscoveryServiceConfig {
             service: DiscoveryService::Smtp,
@@ -260,6 +271,7 @@ fn microsoft_configs(email: &str) -> Vec<DiscoveryServiceConfig> {
             auth: auth("https://outlook.office.com/SMTP.Send"),
             source,
             resolved: false,
+            trust,
         },
         graph(DiscoveryService::Msgraph, "Mail.ReadWrite Mail.Send"),
         graph(DiscoveryService::MsgraphCalendar, "Calendars.ReadWrite"),
@@ -282,7 +294,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use crate::compose::{
-        config::{DiscoveryAuthMethod, DiscoveryService, DiscoveryServiceConfig},
+        config::{
+            DiscoveryAuthMethod, DiscoveryConfigTrust, DiscoveryService, DiscoveryServiceConfig,
+        },
         providers::DiscoveryKnownProvider,
     };
 
@@ -318,7 +332,8 @@ mod tests {
     fn google_offers_the_apis_next_to_the_protocols() {
         use DiscoveryService::*;
 
-        let configs = DiscoveryKnownProvider::Google.configs("a@gmail.com");
+        let trust = DiscoveryConfigTrust::Rule;
+        let configs = DiscoveryKnownProvider::Google.configs("a@gmail.com", trust);
 
         assert_eq!(
             services(&configs),
@@ -343,7 +358,8 @@ mod tests {
     fn microsoft_offers_graph_for_every_domain() {
         use DiscoveryService::*;
 
-        let configs = DiscoveryKnownProvider::Microsoft.configs("a@outlook.com");
+        let trust = DiscoveryConfigTrust::Rule;
+        let configs = DiscoveryKnownProvider::Microsoft.configs("a@outlook.com", trust);
 
         assert_eq!(
             services(&configs),
@@ -370,7 +386,8 @@ mod tests {
 
     #[test]
     fn provider_apis_are_not_probed() {
-        let configs = DiscoveryKnownProvider::Microsoft.configs("a@outlook.com");
+        let trust = DiscoveryConfigTrust::Rule;
+        let configs = DiscoveryKnownProvider::Microsoft.configs("a@outlook.com", trust);
         assert!(
             find(&configs, DiscoveryService::Msgraph)
                 .probe_urls()

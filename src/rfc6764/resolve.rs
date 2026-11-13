@@ -75,12 +75,22 @@ pub enum DiscoveryDavResolveError {
     NotFound(Url),
 }
 
+/// The context root found by a [`DiscoveryDavResolve`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscoveryDavResolveOutput {
+    /// The DAV context root.
+    pub root: Url,
+    /// Whether an SRV record named the origin, not the domain itself.
+    pub srv: bool,
+}
+
 /// I/O-free `domain -> DAV context root` resolver.
 pub struct DiscoveryDavResolve {
     service: DiscoveryDavService,
     domain: String,
     resolver: Url,
     secure_only: bool,
+    srv: bool,
     state: State,
 }
 
@@ -97,6 +107,7 @@ impl DiscoveryDavResolve {
             domain,
             resolver,
             secure_only: false,
+            srv: false,
             state: State::Srv(srv),
         }
     }
@@ -141,7 +152,7 @@ impl DiscoveryDavResolve {
 
 impl DiscoveryCoroutine for DiscoveryDavResolve {
     type Yield = DiscoveryYield;
-    type Return = Result<Url, DiscoveryDavResolveError>;
+    type Return = Result<DiscoveryDavResolveOutput, DiscoveryDavResolveError>;
 
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
         match mem::take(&mut self.state) {
@@ -153,6 +164,7 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
                     };
 
                     let record = self.record(secure, plain);
+                    self.srv = record.is_some();
 
                     // RFC 6764 §6 only queries the TXT `path` record for
                     // a name that actually published an SRV record; with
@@ -231,7 +243,8 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
             },
             State::DiscoveryWellKnown { mut probe, origin } => match probe.resume(arg) {
                 DiscoveryCoroutineState::Complete(Ok(Some(root))) => {
-                    DiscoveryCoroutineState::Complete(Ok(root))
+                    let srv = self.srv;
+                    DiscoveryCoroutineState::Complete(Ok(DiscoveryDavResolveOutput { root, srv }))
                 }
                 DiscoveryCoroutineState::Complete(Ok(None)) => {
                     let check = DiscoveryDavContext::new(origin.clone());
@@ -256,7 +269,8 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
                 candidate,
             } => match check.resume(arg) {
                 DiscoveryCoroutineState::Complete(Ok(Some(root))) => {
-                    DiscoveryCoroutineState::Complete(Ok(root))
+                    let srv = self.srv;
+                    DiscoveryCoroutineState::Complete(Ok(DiscoveryDavResolveOutput { root, srv }))
                 }
                 DiscoveryCoroutineState::Complete(Ok(None)) => match candidate {
                     Candidate::TxtPath => {
@@ -318,11 +332,17 @@ enum Candidate {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use url::Url;
 
     use crate::{
+        coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
         rfc6186::service::DiscoverySrvService,
-        rfc6764::{resolve::DiscoveryDavResolve, service::DiscoveryDavService},
+        rfc6764::{
+            resolve::{DiscoveryDavResolve, DiscoveryDavResolveOutput},
+            service::DiscoveryDavService,
+        },
     };
 
     fn origin(secure_only: bool) -> Url {
@@ -350,5 +370,70 @@ mod tests {
     #[test]
     fn secure_only_ignores_the_plain_record() {
         assert_eq!(origin(true).as_str(), "https://example.com/");
+    }
+
+    /// A DNS-over-TCP answer: one SRV record naming `target` on port
+    /// 443, or no record.
+    fn srv_reply(target: Option<&str>) -> Vec<u8> {
+        let count = u8::from(target.is_some());
+        let mut message = vec![0, 1, 0x81, 0x80, 0, 0, 0, count, 0, 0, 0, 0];
+
+        if let Some(target) = target {
+            let mut rdata = vec![0, 0, 0, 1, 0x01, 0xBB];
+            for label in target.split('.') {
+                rdata.push(label.len() as u8);
+                rdata.extend(label.as_bytes());
+            }
+            rdata.push(0);
+
+            message.extend([0, 0, 33, 0, 1, 0, 0, 0, 60, 0, rdata.len() as u8]);
+            message.extend(rdata);
+        }
+
+        let mut reply = (message.len() as u16).to_be_bytes().to_vec();
+        reply.extend(message);
+        reply
+    }
+
+    /// Resolves CalDAV on `example.com`, answering the four SRV lookups
+    /// with `srv` then every further read with the next of `replies`.
+    fn resolve(srv: [Vec<u8>; 4], replies: &[Vec<u8>]) -> DiscoveryDavResolveOutput {
+        let resolver = Url::parse("tcp://1.1.1.1:53").unwrap();
+        let mut resolve =
+            DiscoveryDavResolve::new("example.com", DiscoveryDavService::Caldav, resolver);
+
+        let mut replies = srv.iter().chain(replies);
+        let mut arg = None;
+
+        loop {
+            match resolve.resume(arg.take()) {
+                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite { .. }) => {}
+                DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead { .. }) => {
+                    let reply = replies.next().expect("a reply for every read");
+                    arg = Some(reply.as_slice());
+                }
+                DiscoveryCoroutineState::Complete(res) => return res.unwrap(),
+            }
+        }
+    }
+
+    #[test]
+    fn the_output_tells_whether_an_srv_record_named_the_origin() {
+        let redirect =
+            b"HTTP/1.1 301 Moved Permanently\r\nLocation: /dav/\r\nContent-Length: 0\r\n\r\n";
+        let challenge = b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"dav\"\r\nContent-Length: 0\r\n\r\n";
+        let http = [redirect.to_vec(), challenge.to_vec()];
+
+        let none = || srv_reply(None);
+        let output = resolve([none(), none(), none(), none()], &http);
+        assert_eq!(output.root.as_str(), "https://example.com/dav/");
+        assert!(!output.srv);
+
+        // The `_caldavs` record, then no TXT path.
+        let named = srv_reply(Some("dav.example.net"));
+        let replies = [none(), redirect.to_vec(), challenge.to_vec()];
+        let output = resolve([none(), named, none(), none()], &replies);
+        assert_eq!(output.root.as_str(), "https://dav.example.net/dav/");
+        assert!(output.srv);
     }
 }

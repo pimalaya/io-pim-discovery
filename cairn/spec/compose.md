@@ -12,7 +12,12 @@ The `compose` module reduces the individual mechanisms into a single ranked list
 Composition SHALL reduce the fixed-provider rules first: when the email domain (or its MX records) matches a known provider (Google, Microsoft), the provider's own configs are produced and tag their source as `Provider`. Provider detection is exposed on its own (`provider`, `is_google`, `is_microsoft`).
 
 ### Requirement: Ordered mechanism fan-out
-For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB / MX provider, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested. `compose_raw`, and the CLI that prints it, SHALL concatenate their configs into one list in that order without deduplicating: each stays the answer of one source, and an endpoint named by several sources appears once per source, merging being the consumer's. `compose_all` and `compose_first` SHALL merge them into one ranked list for callers wanting a single answer (a setup wizard); when they merge a subdomain with its parent host, a resolved endpoint SHALL win over an unresolved one, and between two of the same kind the parent host SHALL win.
+For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB / MX provider, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested. `compose_raw`, and the CLI that prints it, SHALL concatenate their configs into one list in that order without deduplicating: each stays the answer of one source, and an endpoint named by several sources appears once per source, merging being the consumer's. `compose_all` and `compose_first` SHALL merge them into one ranked list for callers wanting a single answer (a setup wizard), the encrypted endpoints first and each group in mechanism order; when they merge a subdomain with its parent host, a resolved endpoint SHALL win over an unresolved one, and between two of the same kind the parent host SHALL win, the source and the trust following the endpoint kept. A subdomain SHALL merge with its parent host between two `https` endpoints only: an unencrypted endpoint SHALL neither merge with nor replace an encrypted one.
+
+#### Scenario: A plain SRV record next to an advertised TLS host
+- GIVEN a document advertising `https://carddav.example.com` and a plain `_carddav` record resolving to `http://d1.carddav.example.com/dav/`
+- WHEN every config is composed
+- THEN both configs are returned, the `https` one first
 
 ### Requirement: Composition entry points
 The client SHALL expose `compose_all` (every reachable config), `compose_first` (the first mechanism, in priority order, that yields one), and `compose_raw` (per-mechanism output without merging). Each mechanism is also reachable directly (`autoconfig`, `srv`, `pacc`, `dav`, `jmap`, `auth`, `oauth_server`, `oauth_resource`).
@@ -21,18 +26,23 @@ The client SHALL expose `compose_all` (every reachable config), `compose_first` 
 `compose_all_within` SHALL run each mechanism on its own detached thread and return only the configs that completed within a caller-supplied timeout. Mechanisms still running at the deadline are abandoned; they finish in the background and their output is dropped. This keeps an interactive caller responsive: a single unreachable endpoint (a firewalled port, a black-hole host) does not stall the whole fan-out until the OS connect timeout expires.
 
 ### Requirement: Auth refinement
-A composed config's advertised auth MAY be refined against a live `WWW-Authenticate` probe: probed schemes replace account-level claims (a password claim drops when only bearer is challenged), while an OAuth issuer is preserved.
+A composed config's advertised auth MAY be refined against a live `WWW-Authenticate` probe of its `https` endpoint: probed schemes replace account-level claims (a password claim drops when only bearer is challenged), while an OAuth issuer is preserved. An endpoint that is not `https` SHALL NOT be probed, and its config SHALL keep the auth its mechanism reported.
 
 ### Requirement: OAuth resolution
-Composition SHALL resolve every OAuth issuer through its RFC 8414 metadata into the grants it advertises (the authorization code grant, and the device grant when a device authorization endpoint is named), each carrying the metadata's `scopes_supported`, leaving an unresolvable issuer as it was. With `rfc9728`, it SHALL first read the protected resource metadata of each distinct HTTP endpoint: a config carrying no OAuth method SHALL gain an issuer per authorization server named, and after issuer resolution every OAuth grant of the config SHALL carry the metadata's `resource`, with its `scopes_supported` when it lists any. An endpoint without metadata SHALL leave its configs as they were.
+Composition SHALL resolve every OAuth issuer through its RFC 8414 metadata into the grants it advertises (the authorization code grant, and the device grant when a device authorization endpoint is named), each carrying the metadata's `scopes_supported`, leaving an unresolvable issuer as it was. With `rfc9728`, it SHALL first read the protected resource metadata of each distinct HTTP endpoint: a config carrying no OAuth method SHALL gain an issuer per authorization server named, and after issuer resolution every OAuth grant of the config SHALL carry the metadata's `resource`, with its `scopes_supported` when it lists any. An endpoint without metadata SHALL leave its configs as they were. Metadata SHALL be used only when it names what was asked: an issuer's metadata whose `issuer` is that issuer, a resource's metadata whose `resource` is the endpoint URL as fetched. Metadata SHALL be fetched over `https` only, and a document naming an endpoint or an authorization server that is not `https` SHALL be refused. Refused metadata counts as none.
 
 #### Scenario: A JMAP session publishing its resource metadata
 - GIVEN a JMAP config whose session URL serves RFC 9728 metadata naming an authorization server and scopes
 - WHEN composition resolves OAuth
 - THEN the config's authorization code grant carries the session URL as `resource` and the resource's scopes
 
+#### Scenario: An endpoint naming another resource
+- GIVEN a config whose endpoint serves RFC 9728 metadata naming another URL as `resource`
+- WHEN composition resolves OAuth
+- THEN the config is left as it was: no issuer is added and no grant is bound
+
 ### Requirement: Advertised DAV roots are resolved
-Composition SHALL probe every CalDAV or CardDAV config whose HTTP endpoint carries no path and that no RFC 6764 resolution produced, at `/.well-known/{caldav,carddav}` (RFC 6764 §5), once per origin and service, without credentials. When the probe ends on a DAV server, the config's endpoint SHALL become that context root and the config SHALL be marked resolved; otherwise it SHALL stay as advertised. `compose_raw`, `compose_all`, `compose_first` and `compose_all_within` SHALL run it, the last one within its deadline. In secure-only mode the probe SHALL NOT follow a redirect to `http://`.
+Composition SHALL probe every CalDAV or CardDAV config whose HTTP endpoint carries no path and that no RFC 6764 resolution produced, at `/.well-known/{caldav,carddav}` (RFC 6764 §5), once per origin and service, without credentials. When the probe ends on a DAV server, the config's endpoint SHALL become that context root and the config SHALL be marked resolved; otherwise it SHALL stay as advertised. `compose_raw`, `compose_all`, `compose_first` and `compose_all_within` SHALL run it, the last one within its deadline. The probe SHALL NOT follow a redirect from `https` to `http://`, nor, in secure-only mode, any redirect to `http://`. A root found through an origin that is not `https` SHALL mark its config `unauthenticated`.
 
 #### Scenario: A provider advertises a bare DAV host
 - GIVEN a configuration document naming `https://carddav.example.com`, whose `/` is not a DAV collection and whose `/.well-known/carddav` redirects to `/dav/addressbooks`
@@ -79,9 +89,17 @@ The client SHALL offer a secure-only mode (`--secure-only` on the CLI), off by d
 - THEN no request is made to the `http://` URL and no config comes from it
 
 ### Requirement: One JSON shape
-Every config SHALL serialize with camelCase keys, its `source` as a string naming the mechanism that produced it, a `resolved` flag (true when its endpoint came out of an RFC 6764 resolution), and, when a fixed provider rule matched, a `provider` field naming the provider.
+Every config SHALL serialize with camelCase keys, its `source` as a string naming the mechanism that produced it, a `resolved` flag (true when its endpoint came out of an RFC 6764 resolution), its `trust` as a string (`rule`, `domain`, `thirdParty` or `unauthenticated`), and, when a fixed provider rule matched, a `provider` field naming the provider.
 
 #### Scenario: A provider config and an autoconfig one read alike
 - GIVEN a Google address and a domain with an autoconfig document
 - WHEN `pim-discovery --json all` runs on each
 - THEN both print `source` as a string, the Google one with `provider: "google"`, and no key holds an underscore
+
+### Requirement: Config trust
+Every config SHALL carry a `trust` telling what vouches that it belongs to the address's domain: `rule` when a fixed provider rule matched the domain itself; `domain` when the domain answered over TLS under its own name (PACC, the autoconfig ISP main and fallback URLs, an RFC 6764 or RFC 8620 resolution whose origin is the domain); `thirdParty` when a fixed third party answered over TLS (the ISPDB entry of the domain); `unauthenticated` when a DNS answer named the host or an exchange ran in clear (a provider matched through MX records, the alias fallback of the ISP main URL, the mailconf target, the MX provider's autoconfig, RFC 6186 SRV records, an RFC 6764 or RFC 8620 resolution whose origin an SRV record named). A config read without the field SHALL count as `unauthenticated`. Discovery SHALL NOT check an `unauthenticated` endpoint against the domain nor ask for a confirmation: that duty (RFC 6186 §6) is the consumer's, before any credential is sent.
+
+#### Scenario: An aliased autoconfig
+- GIVEN a domain whose `autoconfig.<domain>` is an alias of a provider's host serving a certificate for its own name
+- WHEN email discovery runs
+- THEN the configs are tagged `IspMain` with `trust` `unauthenticated`, where a document served by `autoconfig.<domain>` itself is `domain`

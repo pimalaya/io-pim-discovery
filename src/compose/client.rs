@@ -72,7 +72,7 @@ use crate::rfc9728::{DiscoveryOauthResourceMetadata, DiscoveryOauthResourceResol
 use crate::{
     compose::{
         collect::DiscoveryConfigCollector,
-        config::{DiscoveryService, DiscoveryServiceConfig},
+        config::{DiscoveryConfigTrust, DiscoveryService, DiscoveryServiceConfig},
         providers::DiscoveryKnownProvider,
     },
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
@@ -253,16 +253,19 @@ impl DiscoveryComposeClientStd {
     /// Discovers the fixed-provider configs for `email`: the domain
     /// rule first, then MX-based detection. Raw and unmerged.
     pub fn provider(&self, email: &str) -> Vec<DiscoveryServiceConfig> {
-        self.detect_provider(email)
-            .map(|provider| provider.configs(email))
-            .unwrap_or_default()
+        match self.detect_provider(email) {
+            Some((provider, trust)) => provider.configs(email, trust),
+            None => Vec::new(),
+        }
     }
 
     /// The fixed Google configs for `email` when it is Google-hosted
     /// (domain rule or MX records), otherwise empty.
     pub fn is_google(&self, email: &str) -> Vec<DiscoveryServiceConfig> {
         match self.detect_provider(email) {
-            Some(DiscoveryKnownProvider::Google) => DiscoveryKnownProvider::Google.configs(email),
+            Some((DiscoveryKnownProvider::Google, trust)) => {
+                DiscoveryKnownProvider::Google.configs(email, trust)
+            }
             _ => Vec::new(),
         }
     }
@@ -271,8 +274,8 @@ impl DiscoveryComposeClientStd {
     /// Microsoft-hosted (domain rule or MX records), otherwise empty.
     pub fn is_microsoft(&self, email: &str) -> Vec<DiscoveryServiceConfig> {
         match self.detect_provider(email) {
-            Some(DiscoveryKnownProvider::Microsoft) => {
-                DiscoveryKnownProvider::Microsoft.configs(email)
+            Some((DiscoveryKnownProvider::Microsoft, trust)) => {
+                DiscoveryKnownProvider::Microsoft.configs(email, trust)
             }
             _ => Vec::new(),
         }
@@ -336,31 +339,47 @@ impl DiscoveryComposeClientStd {
 
     /// Fetches `issuer`'s RFC 8414 authorization server metadata,
     /// trying the OAuth well-known URL then the OpenID Connect
-    /// Discovery one. `None` when neither resolves.
+    /// Discovery one. `None` unless one resolves, names `issuer` and
+    /// is `https` throughout.
     #[cfg(feature = "rfc8414")]
     pub fn oauth_server(&self, issuer: &Url) -> Option<DiscoveryOauthServerMetadata> {
         let well_known = DiscoveryOauthServerMetadata::well_known_url(issuer);
-        if let Ok(metadata) = run(
-            &mut self.pool(),
-            DiscoveryOauthServerResolve::new(well_known),
-        ) {
-            return Some(metadata);
+        let resolve = DiscoveryOauthServerResolve::new(well_known, issuer.clone());
+        match run(&mut self.pool(), resolve) {
+            Ok(metadata) => return Some(metadata),
+            Err(err) => {
+                debug!("skip OAuth server metadata");
+                trace!("{err:?}");
+            }
         }
 
         let openid = DiscoveryOauthServerMetadata::openid_well_known_url(issuer);
-        run(&mut self.pool(), DiscoveryOauthServerResolve::new(openid)).ok()
+        let resolve = DiscoveryOauthServerResolve::new(openid, issuer.clone());
+        match run(&mut self.pool(), resolve) {
+            Ok(metadata) => Some(metadata),
+            Err(err) => {
+                debug!("skip OpenID Connect Discovery metadata");
+                trace!("{err:?}");
+                None
+            }
+        }
     }
 
     /// Fetches `resource`'s RFC 9728 protected resource metadata from
-    /// its well-known URL. `None` when it does not resolve.
+    /// its well-known URL. `None` unless it resolves, names `resource`
+    /// and is `https` throughout.
     #[cfg(feature = "rfc9728")]
     pub fn oauth_resource(&self, resource: &Url) -> Option<DiscoveryOauthResourceMetadata> {
         let well_known = DiscoveryOauthResourceMetadata::well_known_url(resource);
-        run(
-            &mut self.pool(),
-            DiscoveryOauthResourceResolve::new(well_known),
-        )
-        .ok()
+        let resolve = DiscoveryOauthResourceResolve::new(well_known, resource.clone());
+        match run(&mut self.pool(), resolve) {
+            Ok(metadata) => Some(metadata),
+            Err(err) => {
+                debug!("skip OAuth resource metadata");
+                trace!("{err:?}");
+                None
+            }
+        }
     }
 
     fn compose(
@@ -532,7 +551,7 @@ impl DiscoveryComposeClientStd {
         let provider_output = provider.map(|provider| {
             debug!("email domain matched a fixed provider rule");
             trace!("{domain} -> {provider:?}");
-            provider.configs(email)
+            provider.configs(email, DiscoveryConfigTrust::Rule)
         });
 
         // Mechanisms in priority order, matching the reduction order the
@@ -888,6 +907,9 @@ impl DiscoveryComposeClientStd {
             trace!("{} -> {root}", target.1);
             config.endpoint = DiscoveryEndpoint::Http(root.to_string());
             config.resolved = true;
+            if target.1.scheme() != "https" {
+                config.trust = DiscoveryConfigTrust::Unauthenticated;
+            }
         }
     }
 
@@ -952,11 +974,21 @@ impl DiscoveryComposeClientStd {
     #[cfg(not(feature = "rfc8620"))]
     fn probe(&self, _configs: &mut [DiscoveryServiceConfig]) {}
 
-    /// Detects the fixed provider hosting `email`: the domain rule
-    /// first, then MX-based detection. `None` when neither matches.
-    fn detect_provider(&self, email: &str) -> Option<DiscoveryKnownProvider> {
+    /// Detects the fixed provider hosting `email`, with what vouches
+    /// for the match: the domain rule first, then MX-based detection.
+    /// `None` when neither matches.
+    fn detect_provider(
+        &self,
+        email: &str,
+    ) -> Option<(DiscoveryKnownProvider, DiscoveryConfigTrust)> {
         let domain = domain_part(email);
-        DiscoveryKnownProvider::from_domain(&domain).or_else(|| self.provider_from_mx(&domain))
+
+        if let Some(provider) = DiscoveryKnownProvider::from_domain(&domain) {
+            return Some((provider, DiscoveryConfigTrust::Rule));
+        }
+
+        let provider = self.provider_from_mx(&domain)?;
+        Some((provider, DiscoveryConfigTrust::Unauthenticated))
     }
 
     /// Looks up `domain`'s MX records and returns the first fixed
@@ -992,7 +1024,7 @@ impl DiscoveryComposeClientStd {
     #[cfg(feature = "autoconfig")]
     fn run_mx(&self, domain: &str, email: &str) -> Vec<DiscoveryServiceConfig> {
         self.provider_from_mx(domain)
-            .map(|provider| provider.configs(email))
+            .map(|provider| provider.configs(email, DiscoveryConfigTrust::Unauthenticated))
             .unwrap_or_default()
     }
 
@@ -1036,8 +1068,9 @@ impl DiscoveryComposeClientStd {
 
     #[cfg(feature = "autoconfig")]
     fn run_isp_main(&self, local: &str, domain: &str, email: &str) -> Vec<DiscoveryServiceConfig> {
+        let source = DiscoveryConfigSource::IspMain;
         let configs = match DiscoveryIsp::main_url(local, domain, true) {
-            Ok(url) => self.run_isp(url, email, DiscoveryConfigSource::IspMain),
+            Ok(url) => self.run_isp(url, email, source, DiscoveryConfigTrust::Domain),
             Err(err) => {
                 debug!("skip autoconfig ISP main URL");
                 trace!("{err:?}");
@@ -1047,7 +1080,7 @@ impl DiscoveryComposeClientStd {
 
         if configs.is_empty() {
             let host = format!("autoconfig.{domain}");
-            self.run_isp_alias(&host, email, DiscoveryConfigSource::IspMain)
+            self.run_isp_alias(&host, email, source)
         } else {
             configs
         }
@@ -1055,8 +1088,9 @@ impl DiscoveryComposeClientStd {
 
     #[cfg(feature = "autoconfig")]
     fn run_isp_fallback(&self, domain: &str, email: &str) -> Vec<DiscoveryServiceConfig> {
+        let source = DiscoveryConfigSource::IspFallback;
         match DiscoveryIsp::fallback_url(domain, true) {
-            Ok(url) => self.run_isp(url, email, DiscoveryConfigSource::IspFallback),
+            Ok(url) => self.run_isp(url, email, source, DiscoveryConfigTrust::Domain),
             Err(err) => {
                 debug!("skip autoconfig ISP fallback URL");
                 trace!("{err:?}");
@@ -1067,8 +1101,9 @@ impl DiscoveryComposeClientStd {
 
     #[cfg(feature = "autoconfig")]
     fn run_ispdb(&self, domain: &str, email: &str) -> Vec<DiscoveryServiceConfig> {
+        let source = DiscoveryConfigSource::Ispdb;
         match DiscoveryIsp::db_url(domain, true) {
-            Ok(url) => self.run_isp(url, email, DiscoveryConfigSource::Ispdb),
+            Ok(url) => self.run_isp(url, email, source, DiscoveryConfigTrust::ThirdParty),
             Err(err) => {
                 debug!("skip autoconfig ISPDB URL");
                 trace!("{err:?}");
@@ -1091,7 +1126,8 @@ impl DiscoveryComposeClientStd {
             Ok(url) => {
                 debug!("follow mailconf TXT redirect");
                 trace!("{url}");
-                self.run_isp(url, email, DiscoveryConfigSource::Mailconf)
+                let source = DiscoveryConfigSource::Mailconf;
+                self.run_isp(url, email, source, DiscoveryConfigTrust::Unauthenticated)
             }
             Err(err) => {
                 debug!("skip mailconf TXT redirect");
@@ -1130,25 +1166,28 @@ impl DiscoveryComposeClientStd {
             }
         }
 
+        let source = DiscoveryConfigSource::Mx;
+        let trust = DiscoveryConfigTrust::Unauthenticated;
+
         for base in bases {
             debug!("try autoconfig of the MX provider");
             trace!("{domain} -> {base}");
 
             let host = format!("autoconfig.{base}");
             if let Ok(url) = DiscoveryIsp::host_url(email, &host, true) {
-                let configs = self.run_isp(url, email, DiscoveryConfigSource::Mx);
+                let configs = self.run_isp(url, email, source, trust);
                 if !configs.is_empty() {
                     return configs;
                 }
             }
 
-            let configs = self.run_isp_alias(&host, email, DiscoveryConfigSource::Mx);
+            let configs = self.run_isp_alias(&host, email, source);
             if !configs.is_empty() {
                 return configs;
             }
 
             if let Ok(url) = DiscoveryIsp::db_url(&base, true) {
-                let configs = self.run_isp(url, email, DiscoveryConfigSource::Mx);
+                let configs = self.run_isp(url, email, source, trust);
                 if !configs.is_empty() {
                     return configs;
                 }
@@ -1162,6 +1201,7 @@ impl DiscoveryComposeClientStd {
     /// `host`'s CNAME chain, when `host` is an alias. A provider aliasing
     /// the autoconfig of the domains it hosts to its own host rarely
     /// holds a certificate for the alias, so the alias itself fails.
+    /// Only the DNS answer vouches for the target.
     #[cfg(feature = "autoconfig")]
     fn run_isp_alias(
         &self,
@@ -1184,7 +1224,7 @@ impl DiscoveryComposeClientStd {
         trace!("{host} -> {target}");
 
         match DiscoveryIsp::host_url(email, &target, true) {
-            Ok(url) => self.run_isp(url, email, source),
+            Ok(url) => self.run_isp(url, email, source, DiscoveryConfigTrust::Unauthenticated),
             Err(err) => {
                 debug!("skip autoconfig alias");
                 trace!("{err:?}");
@@ -1199,10 +1239,11 @@ impl DiscoveryComposeClientStd {
         url: Url,
         email: &str,
         source: DiscoveryConfigSource,
+        trust: DiscoveryConfigTrust,
     ) -> Vec<DiscoveryServiceConfig> {
         match run(&mut self.pool(), DiscoveryIsp::new(url)) {
             Ok(config) => self.keep_secure(DiscoveryServiceConfig::from_autoconfig(
-                &config, email, source,
+                &config, email, source, trust,
             )),
             Err(err) => {
                 debug!("skip autoconfig document");
@@ -1274,8 +1315,14 @@ impl DiscoveryComposeClientStd {
         };
 
         match run(&mut self.pool(), resolve) {
-            Ok(url) => {
-                self.keep_secure(vec![DiscoveryServiceConfig::from_dav(config_service, url)])
+            Ok(output) => {
+                let trust = match output.srv {
+                    true => DiscoveryConfigTrust::Unauthenticated,
+                    false => DiscoveryConfigTrust::Domain,
+                };
+                let config = DiscoveryServiceConfig::from_dav(config_service, output.root, trust);
+
+                self.keep_secure(vec![config])
             }
             Err(err) => {
                 debug!("skip RFC 6764 DAV resolve");
@@ -1290,10 +1337,17 @@ impl DiscoveryComposeClientStd {
         let resolve = DiscoveryJmapResolve::new(domain, self.dns.clone());
 
         match run(&mut self.pool(), resolve) {
-            Ok(session) => self.keep_secure(vec![DiscoveryServiceConfig::from_jmap(
-                session.url,
-                &session.auth_schemes,
-            )]),
+            Ok(output) => {
+                let trust = match output.srv {
+                    true => DiscoveryConfigTrust::Unauthenticated,
+                    false => DiscoveryConfigTrust::Domain,
+                };
+                let session = output.session;
+                let config =
+                    DiscoveryServiceConfig::from_jmap(session.url, &session.auth_schemes, trust);
+
+                self.keep_secure(vec![config])
+            }
             Err(err) => {
                 debug!("skip RFC 8620 JMAP resolve");
                 trace!("{err:?}");
@@ -1511,7 +1565,8 @@ mod tests {
 
     #[cfg(feature = "rfc6764")]
     fn advertised(service: DiscoveryService, url: &Url) -> DiscoveryServiceConfig {
-        let mut config = DiscoveryServiceConfig::from_dav(service, url);
+        let trust = DiscoveryConfigTrust::ThirdParty;
+        let mut config = DiscoveryServiceConfig::from_dav(service, url, trust);
         config.source = DiscoveryConfigSource::Ispdb;
         config.resolved = false;
         config
@@ -1539,6 +1594,12 @@ mod tests {
         let expected = DiscoveryEndpoint::Http(format!("{}dav/addressbooks", host));
         assert_eq!(outputs[0][0].endpoint, expected);
         assert!(outputs[0][0].resolved);
+        assert_eq!(
+            outputs[0][0].trust,
+            DiscoveryConfigTrust::Unauthenticated,
+            "a root found in clear"
+        );
+        assert_eq!(outputs[0][1].trust, DiscoveryConfigTrust::ThirdParty);
         assert_eq!(
             outputs[1][0].endpoint, expected,
             "every config of the origin"

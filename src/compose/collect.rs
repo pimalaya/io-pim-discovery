@@ -42,11 +42,13 @@ impl DiscoveryConfigCollector {
     /// existing config instead of duplicating it. HTTP endpoints
     /// compare as normalized URLs, and a subdomain of an already
     /// collected host counts as the same service reached through a
-    /// rotated backend name. A resolved endpoint (RFC 6764) wins over
-    /// an advertised one, since an advertised bare origin may not be a
-    /// DAV context root at all; between two of the same kind, the
-    /// parent host wins, since only it is worth persisting in an
-    /// account.
+    /// rotated backend name, between `https` endpoints only: a
+    /// cleartext endpoint never merges with an encrypted one. A
+    /// resolved endpoint (RFC 6764) wins over an advertised one, since
+    /// an advertised bare origin may not be a DAV context root at all;
+    /// between two of the same kind, the parent host wins, since only
+    /// it is worth persisting in an account. The source and the trust
+    /// follow the endpoint kept.
     pub fn collect(&mut self, configs: Vec<DiscoveryServiceConfig>) {
         for config in configs {
             if !self.wants(config.service) {
@@ -72,6 +74,7 @@ impl DiscoveryConfigCollector {
                         existing.endpoint = config.endpoint;
                         existing.source = config.source;
                         existing.resolved = config.resolved;
+                        existing.trust = config.trust;
                     } else if config.resolved && existing.endpoint.equivalent(&config.endpoint) {
                         existing.resolved = true;
                     }
@@ -91,8 +94,10 @@ impl DiscoveryConfigCollector {
         self.configs.is_empty()
     }
 
-    /// Returns the collected configs, consuming the collector.
-    pub fn finish(self) -> Vec<DiscoveryServiceConfig> {
+    /// Returns the collected configs, consuming the collector: the
+    /// encrypted endpoints first, each group in collection order.
+    pub fn finish(mut self) -> Vec<DiscoveryServiceConfig> {
+        self.configs.sort_by_key(|config| !config.is_secure());
         self.configs
     }
 }
@@ -103,15 +108,22 @@ mod tests {
         collections::BTreeSet,
         string::{String, ToString},
         vec,
+        vec::Vec,
     };
 
     use super::DiscoveryConfigCollector;
     use crate::compose::config::{
-        DiscoveryConfigSource, DiscoveryEndpoint, DiscoveryService, DiscoveryServiceConfig,
+        DiscoveryConfigSource, DiscoveryConfigTrust, DiscoveryEndpoint, DiscoverySecurity,
+        DiscoveryService, DiscoveryServiceConfig,
     };
 
+    /// A CardDAV config, vouched by the domain when PACC is its source.
     fn carddav(url: &str, source: DiscoveryConfigSource, resolved: bool) -> DiscoveryServiceConfig {
-        let mut config = DiscoveryServiceConfig::from_dav(DiscoveryService::Carddav, url);
+        let trust = match source {
+            DiscoveryConfigSource::Pacc => DiscoveryConfigTrust::Domain,
+            _ => DiscoveryConfigTrust::Unauthenticated,
+        };
+        let mut config = DiscoveryServiceConfig::from_dav(DiscoveryService::Carddav, url, trust);
         config.source = source;
         config.resolved = resolved;
         config
@@ -179,6 +191,126 @@ mod tests {
         assert_eq!(
             endpoint(&collector.finish()),
             ("https://carddav.fastmail.com/dav/addressbooks".into(), true)
+        );
+    }
+
+    #[test]
+    fn the_trust_follows_the_endpoint_kept() {
+        let pacc = |resolved| {
+            carddav(
+                "https://carddav.example.com/dav/",
+                DiscoveryConfigSource::Pacc,
+                resolved,
+            )
+        };
+        let shard = carddav(
+            "https://d1.carddav.example.com/dav/",
+            DiscoveryConfigSource::Dav,
+            true,
+        );
+
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![pacc(false)]);
+        collector.collect(vec![shard.clone()]);
+        let configs = collector.finish();
+        assert_eq!(configs[0].source, DiscoveryConfigSource::Dav);
+        assert_eq!(configs[0].trust, DiscoveryConfigTrust::Unauthenticated);
+
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![pacc(true)]);
+        collector.collect(vec![shard]);
+        let configs = collector.finish();
+        assert_eq!(configs[0].source, DiscoveryConfigSource::Pacc);
+        assert_eq!(configs[0].trust, DiscoveryConfigTrust::Domain);
+    }
+
+    #[test]
+    fn a_cleartext_shard_never_replaces_a_tls_endpoint() {
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![carddav(
+            "https://carddav.example.com/",
+            DiscoveryConfigSource::Pacc,
+            false,
+        )]);
+        collector.collect(vec![carddav(
+            "http://d1.carddav.example.com/dav/",
+            DiscoveryConfigSource::Dav,
+            true,
+        )]);
+
+        let endpoints: Vec<_> = collector
+            .finish()
+            .into_iter()
+            .map(|config| (config.endpoint, config.source))
+            .collect();
+        assert_eq!(
+            endpoints,
+            [
+                (
+                    DiscoveryEndpoint::Http("https://carddav.example.com/".into()),
+                    DiscoveryConfigSource::Pacc
+                ),
+                (
+                    DiscoveryEndpoint::Http("http://d1.carddav.example.com/dav/".into()),
+                    DiscoveryConfigSource::Dav
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn encrypted_endpoints_come_before_cleartext_ones() {
+        let imap = |host: &str, security, source| DiscoveryServiceConfig {
+            service: DiscoveryService::Imap,
+            endpoint: DiscoveryEndpoint::Tcp {
+                host: host.to_string(),
+                port: 143,
+                security,
+            },
+            username: None,
+            auth: vec![],
+            source,
+            resolved: false,
+            trust: DiscoveryConfigTrust::Unauthenticated,
+        };
+
+        let mut collector = DiscoveryConfigCollector::new(BTreeSet::new());
+        collector.collect(vec![
+            imap(
+                "plain.example.com",
+                DiscoverySecurity::Plain,
+                DiscoveryConfigSource::IspMain,
+            ),
+            imap(
+                "starttls.example.com",
+                DiscoverySecurity::Starttls,
+                DiscoveryConfigSource::IspMain,
+            ),
+        ]);
+        collector.collect(vec![carddav(
+            "http://dav.example.com/dav/",
+            DiscoveryConfigSource::Dav,
+            true,
+        )]);
+        collector.collect(vec![imap(
+            "tls.example.com",
+            DiscoverySecurity::Tls,
+            DiscoveryConfigSource::Srv,
+        )]);
+
+        let sources: Vec<_> = collector
+            .finish()
+            .into_iter()
+            .map(|config| (config.is_secure(), config.source))
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                (true, DiscoveryConfigSource::IspMain),
+                (true, DiscoveryConfigSource::Srv),
+                (false, DiscoveryConfigSource::IspMain),
+                (false, DiscoveryConfigSource::Dav),
+            ]
         );
     }
 }

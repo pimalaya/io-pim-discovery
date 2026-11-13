@@ -127,6 +127,13 @@ pub enum DiscoveryOauthResourceResolveError {
         /// HTTP status code returned.
         code: u16,
     },
+    /// The metadata names this resource, not the one asked.
+    #[error("Resource metadata names another resource {0}")]
+    Resource(Url),
+    /// The metadata URL, the resource or a server it names is not
+    /// `https`.
+    #[error("Resource metadata URL {0} is not https")]
+    NotHttps(Url),
 }
 
 /// I/O-free coroutine that GETs a protected resource's metadata URL
@@ -135,18 +142,25 @@ pub enum DiscoveryOauthResourceResolveError {
 /// [`DiscoveryOauthResourceMetadata::well_known_url`]) and parses the JSON
 /// metadata. Yields its target URL on every step so the std client
 /// routes bytes through the matching HTTPS stream.
+///
+/// The document is refused unless it names the resource asked and
+/// every URL involved is `https`.
+///
+/// Refs: <https://datatracker.ietf.org/doc/html/rfc9728#section-3.3>
 pub struct DiscoveryOauthResourceResolve {
     target: Url,
+    resource: Url,
     send: Http11Send,
 }
 
 impl DiscoveryOauthResourceResolve {
-    /// Builds a coroutine fetching the metadata document at `url`.
-    pub fn new(url: Url) -> Self {
+    /// Builds a coroutine fetching the metadata of `resource` at `url`.
+    pub fn new(url: Url, resource: Url) -> Self {
         let request = HttpRequest::get(url.clone()).header("Accept", "application/json");
 
         Self {
             target: url,
+            resource,
             send: Http11Send::new(request),
         }
     }
@@ -157,14 +171,39 @@ impl DiscoveryCoroutine for DiscoveryOauthResourceResolve {
     type Return = Result<DiscoveryOauthResourceMetadata, DiscoveryOauthResourceResolveError>;
 
     fn resume(&mut self, arg: Option<&[u8]>) -> DiscoveryCoroutineState<Self::Yield, Self::Return> {
+        if self.target.scheme() != "https" {
+            let err = DiscoveryOauthResourceResolveError::NotHttps(self.target.clone());
+            return DiscoveryCoroutineState::Complete(Err(err));
+        }
+
         match self.send.resume(arg) {
             HttpCoroutineState::Complete(Ok(HttpSendOutput { response, .. }))
                 if response.status.is_success() =>
             {
-                match DiscoveryOauthResourceMetadata::try_from(response.body.as_slice()) {
-                    Ok(metadata) => DiscoveryCoroutineState::Complete(Ok(metadata)),
-                    Err(err) => DiscoveryCoroutineState::Complete(Err(err.into())),
+                let body = response.body.as_slice();
+                let metadata = match DiscoveryOauthResourceMetadata::try_from(body) {
+                    Ok(metadata) => metadata,
+                    Err(err) => return DiscoveryCoroutineState::Complete(Err(err.into())),
+                };
+
+                if metadata.resource != self.resource {
+                    let err = DiscoveryOauthResourceResolveError::Resource(metadata.resource);
+                    return DiscoveryCoroutineState::Complete(Err(err));
                 }
+
+                let cleartext = [&metadata.resource]
+                    .into_iter()
+                    .chain(&metadata.authorization_servers)
+                    .chain(&metadata.jwks_uri)
+                    .find(|url| url.scheme() != "https")
+                    .cloned();
+
+                if let Some(url) = cleartext {
+                    let err = DiscoveryOauthResourceResolveError::NotHttps(url);
+                    return DiscoveryCoroutineState::Complete(Err(err));
+                }
+
+                DiscoveryCoroutineState::Complete(Ok(metadata))
             }
             HttpCoroutineState::Complete(Ok(HttpSendOutput { response, .. })) => {
                 DiscoveryCoroutineState::Complete(Err(DiscoveryOauthResourceResolveError::Status {
@@ -199,9 +238,79 @@ impl DiscoveryCoroutine for DiscoveryOauthResourceResolve {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+
     use url::Url;
 
-    use crate::rfc9728::{DiscoveryOauthResourceMetadata, challenge_resource_metadata};
+    use crate::{
+        coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
+        rfc9728::{
+            DiscoveryOauthResourceMetadata, DiscoveryOauthResourceResolve,
+            DiscoveryOauthResourceResolveError, challenge_resource_metadata,
+        },
+    };
+
+    /// Resolves `resource` at its well-known URL, answered with `body`.
+    fn resolve(
+        resource: &str,
+        body: &str,
+    ) -> Result<DiscoveryOauthResourceMetadata, DiscoveryOauthResourceResolveError> {
+        let resource: Url = resource.parse().unwrap();
+        let url = DiscoveryOauthResourceMetadata::well_known_url(&resource);
+        let mut resolve = DiscoveryOauthResourceResolve::new(url, resource);
+
+        let DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite { .. }) =
+            resolve.resume(None)
+        else {
+            panic!("expected a request to be written");
+        };
+        let DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsRead { .. }) =
+            resolve.resume(None)
+        else {
+            panic!("expected the response to be read");
+        };
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let DiscoveryCoroutineState::Complete(res) = resolve.resume(Some(reply.as_bytes())) else {
+            panic!("expected the resolve to complete");
+        };
+
+        res
+    }
+
+    #[test]
+    fn metadata_is_used_only_when_it_names_the_resource_asked() {
+        let body = r#"{
+            "resource": "https://api.example.com/jmap/session",
+            "authorization_servers": ["https://as.example.com"]
+        }"#;
+
+        let metadata = resolve("https://api.example.com/jmap/session", body).unwrap();
+        assert_eq!(metadata.authorization_servers.len(), 1);
+
+        let err = resolve("https://jmap.example.org/session", body).unwrap_err();
+        assert!(
+            matches!(err, DiscoveryOauthResourceResolveError::Resource(_)),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn metadata_naming_a_cleartext_authorization_server_is_refused() {
+        let body = r#"{
+            "resource": "https://api.example.com/jmap/session",
+            "authorization_servers": ["http://as.example.com"]
+        }"#;
+
+        let err = resolve("https://api.example.com/jmap/session", body).unwrap_err();
+        assert!(
+            matches!(err, DiscoveryOauthResourceResolveError::NotHttps(_)),
+            "{err}"
+        );
+    }
 
     #[test]
     fn well_known_url_inserts_the_resource_path() {

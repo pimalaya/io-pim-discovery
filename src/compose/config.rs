@@ -28,8 +28,8 @@ use crate::rfc6186::service::{DiscoverySrvReport, DiscoverySrvService};
 /// One discovered way to use one service: where to connect, how to
 /// authenticate, and which mechanism found it.
 ///
-/// It serializes with its `source` as a string and, when a fixed rule
-/// matched, the provider in a `provider` field of its own.
+/// It serializes with its `source` and `trust` as strings and, when a
+/// fixed rule matched, the provider in a `provider` field of its own.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
     into = "DiscoveryServiceConfigWire",
@@ -56,6 +56,14 @@ pub struct DiscoveryServiceConfig {
     /// `dav` mechanism's walk, or the well-known probe of an advertised
     /// bare origin) rather than as a mechanism advertised it.
     pub resolved: bool,
+
+    /// What vouches that the config belongs to the address's domain.
+    ///
+    /// Before credentials go to an unauthenticated config, check that
+    /// its host lies inside the domain or have the user confirm it.
+    ///
+    /// Refs: <https://datatracker.ietf.org/doc/html/rfc6186#section-6>
+    pub trust: DiscoveryConfigTrust,
 }
 
 impl DiscoveryServiceConfig {
@@ -74,8 +82,9 @@ impl DiscoveryServiceConfig {
     /// schemes (to feed [`refine_auth`]): the HTTP endpoint itself,
     /// then the service's well-known path for the DAV services (some
     /// servers, fastmail among them, 404 the bare origin but guard
-    /// the well-known walk). Empty for TCP endpoints and for provider
-    /// APIs, whose fixed rules already name their OAuth grants.
+    /// the well-known walk). Empty for TCP endpoints, for provider
+    /// APIs, whose fixed rules already name their OAuth grants, and
+    /// for an endpoint that is not `https`.
     ///
     /// [`refine_auth`]: Self::refine_auth
     pub fn probe_urls(&self) -> Vec<Url> {
@@ -96,6 +105,9 @@ impl DiscoveryServiceConfig {
         let Ok(url) = Url::parse(raw) else {
             return Vec::new();
         };
+        if url.scheme() != "https" {
+            return Vec::new();
+        }
 
         let mut urls = vec![url.clone()];
         let well_known = match self.service {
@@ -204,12 +216,14 @@ impl DiscoveryServiceConfig {
     /// Flattens a Mozilla autoconfig document into one config per
     /// incoming/outgoing server. Servers without a hostname are
     /// skipped; a missing port falls back to the well-known port of
-    /// the service and security combination.
+    /// the service and security combination. `trust` tells what vouched
+    /// for the document.
     #[cfg(feature = "autoconfig")]
     pub fn from_autoconfig(
         config: &DiscoveryAutoconfig,
         email: &str,
         source: DiscoveryConfigSource,
+        trust: DiscoveryConfigTrust,
     ) -> Vec<Self> {
         let provider = &config.email_provider;
         let servers = provider
@@ -280,6 +294,7 @@ impl DiscoveryServiceConfig {
                 auth,
                 source,
                 resolved: false,
+                trust,
             });
         }
 
@@ -327,6 +342,7 @@ impl DiscoveryServiceConfig {
                 auth: auth.clone(),
                 source: DiscoveryConfigSource::Pacc,
                 resolved: false,
+                trust: DiscoveryConfigTrust::Domain,
             });
         }
 
@@ -349,6 +365,7 @@ impl DiscoveryServiceConfig {
                 auth: auth.clone(),
                 source: DiscoveryConfigSource::Pacc,
                 resolved: false,
+                trust: DiscoveryConfigTrust::Domain,
             });
         }
 
@@ -408,6 +425,7 @@ impl DiscoveryServiceConfig {
                 auth: vec![DiscoveryAuthMethod::Password],
                 source: DiscoveryConfigSource::Srv,
                 resolved: false,
+                trust: DiscoveryConfigTrust::Unauthenticated,
             });
         }
 
@@ -416,8 +434,12 @@ impl DiscoveryServiceConfig {
 
     /// Wraps an RFC 6764 context root into a single config. DAV
     /// discovery advertises no authentication data, so password login
-    /// is assumed.
-    pub fn from_dav(service: DiscoveryService, url: impl ToString) -> Self {
+    /// is assumed. `trust` tells what vouched for the origin.
+    pub fn from_dav(
+        service: DiscoveryService,
+        url: impl ToString,
+        trust: DiscoveryConfigTrust,
+    ) -> Self {
         Self {
             service,
             endpoint: DiscoveryEndpoint::Http(url.to_string()),
@@ -425,6 +447,7 @@ impl DiscoveryServiceConfig {
             auth: vec![DiscoveryAuthMethod::Password],
             source: DiscoveryConfigSource::Dav,
             resolved: true,
+            trust,
         }
     }
 
@@ -433,8 +456,9 @@ impl DiscoveryServiceConfig {
     /// endpoint advertised on its unauthenticated 401 (`basic` means
     /// password login, `bearer` a bearer token). With no advertisement
     /// the list stays empty: which methods to offer then is the
-    /// consumer's call, not a fact discovery found.
-    pub fn from_jmap(url: impl ToString, schemes: &[String]) -> Self {
+    /// consumer's call, not a fact discovery found. `trust` tells what
+    /// vouched for the origin.
+    pub fn from_jmap(url: impl ToString, schemes: &[String], trust: DiscoveryConfigTrust) -> Self {
         let mut auth = Vec::new();
 
         for scheme in schemes {
@@ -452,6 +476,7 @@ impl DiscoveryServiceConfig {
             auth,
             source: DiscoveryConfigSource::Jmap,
             resolved: false,
+            trust,
         }
     }
 }
@@ -531,7 +556,7 @@ impl DiscoveryEndpoint {
     /// stable service name (fastmail's SRV records answer with
     /// `dNNNNNN.carddav.fastmail.com` shards under the
     /// `carddav.fastmail.com` its own configuration document
-    /// advertises).
+    /// advertises). Both endpoints must be `https`.
     pub fn subdomain_of(&self, other: &Self) -> bool {
         let (Self::Http(a), Self::Http(b)) = (self, other) else {
             return false;
@@ -539,6 +564,9 @@ impl DiscoveryEndpoint {
         let (Ok(a), Ok(b)) = (Url::parse(a), Url::parse(b)) else {
             return false;
         };
+        if a.scheme() != "https" || b.scheme() != "https" {
+            return false;
+        }
         let (Some(a), Some(b)) = (a.host_str(), b.host_str()) else {
             return false;
         };
@@ -555,8 +583,8 @@ mod tests {
 
     use crate::compose::{
         config::{
-            DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryEndpoint, DiscoverySecurity,
-            DiscoveryService, DiscoveryServiceConfig,
+            DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryConfigTrust, DiscoveryEndpoint,
+            DiscoverySecurity, DiscoveryService, DiscoveryServiceConfig,
         },
         providers::DiscoveryKnownProvider,
     };
@@ -602,6 +630,7 @@ mod tests {
             },
         );
         assert_eq!(smtp.source, DiscoveryConfigSource::Srv);
+        assert_eq!(smtp.trust, DiscoveryConfigTrust::Unauthenticated);
     }
 
     #[test]
@@ -616,6 +645,7 @@ mod tests {
             ],
             source: DiscoveryConfigSource::Pacc,
             resolved: false,
+            trust: DiscoveryConfigTrust::Domain,
         };
 
         // The endpoint advertises bearer only: the account-level
@@ -643,6 +673,7 @@ mod tests {
             auth,
             source: DiscoveryConfigSource::Jmap,
             resolved: false,
+            trust: DiscoveryConfigTrust::Domain,
         }
     }
 
@@ -719,6 +750,7 @@ mod tests {
             auth: vec![],
             source: DiscoveryConfigSource::IspMain,
             resolved: false,
+            trust: DiscoveryConfigTrust::Domain,
         };
         let tcp = |security| DiscoveryEndpoint::Tcp {
             host: "imap.example.com".to_string(),
@@ -737,7 +769,7 @@ mod tests {
     #[test]
     fn json_names_the_source_and_the_provider_apart() {
         let provider = DiscoveryKnownProvider::Google
-            .configs("a@gmail.com")
+            .configs("a@gmail.com", DiscoveryConfigTrust::Rule)
             .remove(0);
         let autoconfig = DiscoveryServiceConfig {
             service: DiscoveryService::Imap,
@@ -756,6 +788,7 @@ mod tests {
             }],
             source: DiscoveryConfigSource::IspMain,
             resolved: false,
+            trust: DiscoveryConfigTrust::Domain,
         };
 
         let provider_json = to_value(&provider).unwrap();
@@ -769,10 +802,14 @@ mod tests {
         let dav = to_value(DiscoveryServiceConfig::from_dav(
             DiscoveryService::Carddav,
             "https://dav.example.com/dav",
+            DiscoveryConfigTrust::ThirdParty,
         ))
         .unwrap();
         assert_eq!(dav["resolved"], true);
-        assert!(from_value::<DiscoveryServiceConfig>(dav).unwrap().resolved);
+        assert_eq!(dav["trust"], "thirdParty");
+        let dav: DiscoveryServiceConfig = from_value(dav).unwrap();
+        assert!(dav.resolved);
+        assert_eq!(dav.trust, DiscoveryConfigTrust::ThirdParty);
 
         no_snake_case_key(&provider_json);
         no_snake_case_key(&autoconfig_json);
@@ -780,6 +817,20 @@ mod tests {
         let back: DiscoveryServiceConfig = from_value(provider_json).unwrap();
         assert_eq!(back.source, provider.source);
         assert_eq!(back.auth, provider.auth);
+    }
+
+    #[test]
+    fn json_names_what_vouches_for_a_config() {
+        let provider = DiscoveryKnownProvider::Google
+            .configs("a@gmail.com", DiscoveryConfigTrust::Rule)
+            .remove(0);
+        let mut json = to_value(&provider).unwrap();
+        assert_eq!(json["trust"], "rule");
+
+        // A config written before the field existed claims nothing.
+        json.as_object_mut().unwrap().remove("trust");
+        let legacy: DiscoveryServiceConfig = from_value(json).unwrap();
+        assert_eq!(to_value(&legacy).unwrap()["trust"], "unauthenticated");
     }
 
     fn no_snake_case_key(value: &Value) {
@@ -818,6 +869,24 @@ mod tests {
         assert!(!parent.subdomain_of(&shard));
         assert!(!sibling.subdomain_of(&parent));
         assert!(!lookalike.subdomain_of(&parent));
+
+        let plain_parent = DiscoveryEndpoint::Http("http://carddav.example.com".to_string());
+        let plain_shard = DiscoveryEndpoint::Http("http://d1.carddav.example.com/dav".to_string());
+
+        assert!(!plain_shard.subdomain_of(&parent));
+        assert!(!shard.subdomain_of(&plain_parent));
+        assert!(!plain_shard.subdomain_of(&plain_parent));
+    }
+
+    #[test]
+    fn a_cleartext_endpoint_is_not_probed_for_its_schemes() {
+        let dav = |url: &str| {
+            let trust = DiscoveryConfigTrust::Unauthenticated;
+            DiscoveryServiceConfig::from_dav(DiscoveryService::Carddav, url, trust)
+        };
+
+        assert!(dav("http://dav.example.com/dav/").probe_urls().is_empty());
+        assert_eq!(dav("https://dav.example.com/dav/").probe_urls().len(), 2);
     }
 }
 
@@ -912,6 +981,22 @@ pub enum DiscoveryConfigSource {
     Jmap,
 }
 
+/// What vouches that a config belongs to the address's domain.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiscoveryConfigTrust {
+    /// A rule built into the library matched the domain itself.
+    Rule,
+    /// The domain, answering over TLS under its own name.
+    Domain,
+    /// A fixed third party, answering over TLS.
+    ThirdParty,
+    /// Nothing: a DNS answer named the host, or an exchange ran in
+    /// clear.
+    #[default]
+    Unauthenticated,
+}
+
 /// The serialized shape of a [`DiscoveryServiceConfig`].
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -923,6 +1008,8 @@ struct DiscoveryServiceConfigWire {
     source: DiscoveryConfigSourceWire,
     #[serde(default)]
     resolved: bool,
+    #[serde(default)]
+    trust: DiscoveryConfigTrust,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider: Option<DiscoveryKnownProvider>,
 }
@@ -965,6 +1052,7 @@ impl From<DiscoveryServiceConfig> for DiscoveryServiceConfigWire {
             auth: config.auth,
             source,
             resolved: config.resolved,
+            trust: config.trust,
             provider,
         }
     }
@@ -997,6 +1085,7 @@ impl TryFrom<DiscoveryServiceConfigWire> for DiscoveryServiceConfig {
             auth: wire.auth,
             source,
             resolved: wire.resolved,
+            trust: wire.trust,
         })
     }
 }

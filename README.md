@@ -77,7 +77,7 @@ To use io-pim-discovery as a library, add it to your Cargo.toml and pick the mec
 
 ## Usage
 
-The CLI is organised by PIM domain (email, calendar, contact, file), plus all and auth; each mechanism is exposed independently and the source column tells the rows apart. A few real-world invocations:
+The CLI is organised by PIM domain (email, calendar, contact, file), plus all and auth; each mechanism is exposed independently, the source column tells the rows apart and the trust column tells what vouches for each. A few real-world invocations:
 
 ```sh
 pim-discovery all user@fastmail.com

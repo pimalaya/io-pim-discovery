@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `DiscoveryConfigTrust`, what vouches that a config belongs to the address's domain.
+
+  One of `Rule`, `Domain`, `ThirdParty` or `Unauthenticated`, serialized as `trust` and shown by the CLI table.
+
+- Added `DiscoveryDavResolveOutput`, the context root and whether an SRV record named its origin.
+- Added `DiscoveryJmapResolveOutput`, the session resource and whether an SRV record named its origin.
+
+### Changed
+
+- **BREAKING**: Changed `DiscoveryServiceConfig` to carry `trust`.
+
+  A config read without the field counts as `unauthenticated`.
+
+- **BREAKING**: Changed `DiscoveryOauthServerResolve::new` to take the issuer asked.
+- **BREAKING**: Changed `DiscoveryOauthResourceResolve::new` to take the resource asked.
+- **BREAKING**: Changed `DiscoveryOauthServerResolveError` to carry `Issuer` and `NotHttps`.
+- **BREAKING**: Changed `DiscoveryOauthResourceResolveError` to carry `Resource` and `NotHttps`.
+- **BREAKING**: Changed `DiscoveryDavResolve` to return `DiscoveryDavResolveOutput`.
+- **BREAKING**: Changed `DiscoveryJmapResolve` to return `DiscoveryJmapResolveOutput`.
+- **BREAKING**: Changed `DiscoveryServiceConfig::from_autoconfig`, `from_dav` and `from_jmap` to take the trust.
+- **BREAKING**: Changed `DiscoveryKnownProvider::configs` to take the trust.
+- Changed `DiscoveryConfigCollector::finish` to list the encrypted endpoints first.
+- Changed `DiscoveryServiceConfig::probe_urls` to return nothing for an endpoint that is not `https`.
+
+  The auth of a cleartext endpoint is no longer refined from its own answer.
+
+### Fixed
+
+- Fixed a cleartext endpoint replacing an encrypted one in `compose_all` and `compose_first`.
+
+  A subdomain merges with its parent host between two `https` endpoints only.
+
+- Fixed OAuth metadata being used whatever issuer or resource it named.
+
+  A document naming another one, or a URL that is not `https`, is refused (RFC 8414 §3.3, RFC 9728 §3.3).
+
+- Fixed the redirect walk following any URL scheme.
+
+  A redirect is followed to `https`, or to `http` from an `http` URL.
+
 ## [0.11.0] - 2026-11-04
 
 ### Added

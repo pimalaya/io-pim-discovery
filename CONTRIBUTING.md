@@ -13,14 +13,14 @@ Everything below documents only what differs from the Pimalaya standards.
 
 ## Library and binary
 
-io-pim-discovery is both a library and a CLI: the coroutines and clients are the library, and the `cli` feature adds the `pim-discovery` binary on top. The library targets no_std; the binary is std, as usual.
+io-pim-discovery is both a library and a CLI: the coroutines and clients are the library, and the `cli` feature adds the `pim-discovery` binary on top. The library targets no_std, except the `autoconfig` mechanism, whose XML parser needs std; the binary is std, as usual.
 
 ## Feature matrix
 
 Every mechanism sits behind its own feature; the `cli` feature turns on the ones the binary exposes:
 
 ```sh
-cargo build --no-default-features --features autoconfig     # one mechanism, pure coroutines
+cargo build --no-default-features --features rfc6186        # one mechanism, pure coroutines
 cargo build --no-default-features --features rfc6764,client # a mechanism plus the light client
 cargo build --features cli                                  # the full CLI binary
 cargo build --all-features                                  # everything

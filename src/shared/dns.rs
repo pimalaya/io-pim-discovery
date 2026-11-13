@@ -45,7 +45,7 @@ use io_http::{
     rfc9112::send::{Http11Send, Http11SendError},
 };
 use thiserror::Error;
-use url::Url;
+use url::{Host, Url};
 
 use crate::coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield};
 
@@ -77,15 +77,23 @@ pub(crate) const DNS_QUERY_BUF_SIZE: usize = 4 * 1024;
 /// The query builders take bare names (`_imap._tcp.example.com`,
 /// `_ua-auto-config.example.com`), but `RevNameBuf`'s parser rejects
 /// relative names (`NameParseError::Relative`, "did not end with
-/// `.`"), so a root dot is appended when it is missing.
+/// `.`"), so a root dot is appended when it is missing. It rejects
+/// non-ASCII labels too, so an internationalized name is turned into
+/// its A-label form.
 pub(crate) fn absolute_name(name: &str) -> String {
-    use alloc::format;
+    let mut name = name.to_string();
 
-    if name.ends_with('.') {
-        name.to_string()
-    } else {
-        format!("{name}.")
+    if !name.is_ascii()
+        && let Ok(Host::Domain(ascii)) = Host::parse(&name)
+    {
+        name = ascii;
     }
+
+    if !name.ends_with('.') {
+        name.push('.');
+    }
+
+    name
 }
 
 /// Errors that can occur during a single DNS message exchange.
@@ -100,6 +108,9 @@ pub enum DiscoveryDnsExchangeError {
     /// The DNS-over-HTTPS resolver answered with a non-2xx status.
     #[error("DNS-over-HTTPS resolver answered HTTP {0}")]
     HttpStatus(u16),
+    /// The resolver answered with a failure response code.
+    #[error("DNS resolver answered {}", .0.name())]
+    Rcode(DiscoveryDnsRcode),
 }
 
 /// I/O-free coroutine carrying one bare DNS message to the resolver
@@ -107,7 +118,8 @@ pub enum DiscoveryDnsExchangeError {
 /// length-prefixed framing (added and stripped here); an `http(s)://`
 /// resolver speaks RFC 8484 DNS-over-HTTPS (one POST of the message
 /// as `application/dns-message`). Completes with the bare response
-/// message bytes.
+/// message bytes, or with the response code when it is neither
+/// `NOERROR` nor `NXDOMAIN`.
 #[derive(Debug)]
 pub struct DiscoveryDnsExchange {
     resolver: Url,
@@ -156,6 +168,16 @@ impl DiscoveryDnsExchange {
 
         Self { resolver, state }
     }
+
+    /// The response `message`, or its response code when it is a
+    /// failure (the low nibble of the fourth header byte, RFC 1035
+    /// §4.1.1).
+    fn answer(message: Vec<u8>) -> Result<Vec<u8>, DiscoveryDnsExchangeError> {
+        match message.get(3).map(|flags| DiscoveryDnsRcode(flags & 0x0F)) {
+            Some(rcode) if !rcode.is_answer() => Err(DiscoveryDnsExchangeError::Rcode(rcode)),
+            _ => Ok(message),
+        }
+    }
 }
 
 impl DiscoveryCoroutine for DiscoveryDnsExchange {
@@ -191,7 +213,7 @@ impl DiscoveryCoroutine for DiscoveryDnsExchange {
                     if response.len() >= 2 + body_len {
                         let mut body = response.split_off(2);
                         body.truncate(body_len);
-                        return DiscoveryCoroutineState::Complete(Ok(body));
+                        return DiscoveryCoroutineState::Complete(Self::answer(body));
                     }
                 }
 
@@ -228,7 +250,7 @@ impl DiscoveryCoroutine for DiscoveryDnsExchange {
                         ));
                     }
 
-                    DiscoveryCoroutineState::Complete(Ok(out.response.body))
+                    DiscoveryCoroutineState::Complete(Self::answer(out.response.body))
                 }
                 HttpCoroutineState::Complete(Err(err)) => {
                     DiscoveryCoroutineState::Complete(Err(DiscoveryDnsExchangeError::Http(err)))
@@ -515,6 +537,9 @@ impl DiscoveryCoroutine for DiscoveryDnsProbe {
             DiscoveryCoroutineState::Complete(Err(DiscoveryDnsExchangeError::Eof)) => {
                 DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::Eof))
             }
+            DiscoveryCoroutineState::Complete(Err(DiscoveryDnsExchangeError::Rcode(rcode))) => {
+                DiscoveryCoroutineState::Complete(Ok(rcode))
+            }
             DiscoveryCoroutineState::Complete(Err(err)) => {
                 DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::Exchange(err)))
             }
@@ -669,5 +694,55 @@ mod tests {
             probe.resume(Some(&[])),
             DiscoveryCoroutineState::Complete(Err(DiscoveryDnsProbeError::Eof))
         ));
+    }
+
+    #[test]
+    fn an_internationalized_name_is_asked_in_its_a_label_form() {
+        assert_eq!(
+            absolute_name("_imaps._tcp.b\u{fc}cher.example"),
+            "_imaps._tcp.xn--bcher-kva.example."
+        );
+        assert_eq!(
+            absolute_name("_imaps._tcp.example.org"),
+            "_imaps._tcp.example.org."
+        );
+
+        let resolver: Url = "tcp://1.1.1.1:53".parse().unwrap();
+        let mut probe = DiscoveryDnsProbe::new("b\u{fc}cher.example", resolver);
+        match probe.resume(None) {
+            DiscoveryCoroutineState::Yielded(DiscoveryYield::WantsWrite { bytes, .. }) => {
+                assert_eq!(bytes[2 + 13..2 + 13 + 13], *b"xn--bcher-kva", "qname");
+            }
+            state => panic!("expected WantsWrite, got {state:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failure_response_code_is_an_error_not_an_empty_answer() {
+        let resolver: Url = "tcp://1.1.1.1:53".parse().unwrap();
+        let answer = |rcode: u8| {
+            let mut txt = DiscoveryDnsTxt::new("example.org", resolver.clone());
+            txt.resume(None);
+            txt.resume(None);
+            let header = [0u8, 1, 0x81, 0x80 | rcode, 0, 1, 0, 0, 0, 0, 0, 0];
+            let reply = [&[0u8, 12][..], &header[..]].concat();
+            match txt.resume(Some(&reply)) {
+                DiscoveryCoroutineState::Complete(result) => result,
+                state => panic!("expected Complete, got {state:?}"),
+            }
+        };
+
+        assert!(answer(0).unwrap().is_empty());
+        assert!(answer(3).unwrap().is_empty(), "NXDOMAIN is an answer");
+
+        let err = answer(2).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DiscoveryDnsTxtError::Exchange(DiscoveryDnsExchangeError::Rcode(rcode))
+                    if rcode.name() == "SERVFAIL"
+            ),
+            "{err:?}"
+        );
     }
 }

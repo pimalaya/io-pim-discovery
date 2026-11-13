@@ -90,6 +90,9 @@ pub enum DiscoveryServerType {
     Imap,
     /// Simple Mail Transfer Protocol.
     Smtp,
+    /// A protocol this library does not know.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Transport security layer applied to a server connection.
@@ -104,6 +107,9 @@ pub enum DiscoverySecurityType {
     /// Implicit TLS from the first byte (TLS/SSL wrapper).
     #[serde(alias = "SSL")]
     Tls,
+    /// A security layer this library does not know.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Authentication mechanism supported by a server.
@@ -111,16 +117,16 @@ pub enum DiscoverySecurityType {
 #[serde(rename_all = "camelCase")]
 pub enum DiscoveryAuthenticationType {
     /// Plain-text password sent in the clear (PLAIN/LOGIN).
-    #[serde(alias = "password-cleartext")]
+    #[serde(alias = "password-cleartext", alias = "plain")]
     PasswordCleartext,
     /// Password transmitted in an encrypted form (CRAM-MD5 etc.).
-    #[serde(alias = "password-encrypted")]
+    #[serde(alias = "password-encrypted", alias = "secure")]
     PasswordEncrypted,
     /// Microsoft NTLM challenge-response authentication.
     #[serde(alias = "NTLM")]
     Ntlm,
     /// Kerberos/GSSAPI authentication.
-    #[serde(alias = "GSAPI")]
+    #[serde(alias = "GSSAPI", alias = "GSAPI")]
     GsApi,
     /// Server authenticates the client by its IP address; no
     /// credentials required.
@@ -134,6 +140,9 @@ pub enum DiscoveryAuthenticationType {
     OAuth2,
     /// No authentication required.
     None,
+    /// A mechanism this library does not know.
+    #[serde(other)]
+    Unknown,
 }
 
 /// POP3-specific server options (`<pop3>`).
@@ -250,6 +259,7 @@ impl fmt::Display for DiscoveryServer {
             DiscoveryServerType::Imap => "imap",
             DiscoveryServerType::Pop3 => "pop3",
             DiscoveryServerType::Smtp => "smtp",
+            DiscoveryServerType::Unknown => "?",
         };
         write!(
             f,
@@ -264,6 +274,7 @@ impl fmt::Display for DiscoveryServer {
                 DiscoverySecurityType::Plain => "Plain",
                 DiscoverySecurityType::Starttls => "STARTTLS",
                 DiscoverySecurityType::Tls => "SSL",
+                DiscoverySecurityType::Unknown => "?",
             };
             write!(f, " ({label})")?;
         }
@@ -276,11 +287,12 @@ impl fmt::Display for DiscoveryServer {
                 DiscoveryAuthenticationType::PasswordCleartext => "password-cleartext",
                 DiscoveryAuthenticationType::PasswordEncrypted => "password-encrypted",
                 DiscoveryAuthenticationType::Ntlm => "NTLM",
-                DiscoveryAuthenticationType::GsApi => "GSAPI",
+                DiscoveryAuthenticationType::GsApi => "GSSAPI",
                 DiscoveryAuthenticationType::ClientIPAddress => "client-IP-address",
                 DiscoveryAuthenticationType::TlsClientCert => "TLS-client-cert",
                 DiscoveryAuthenticationType::OAuth2 => "OAuth2",
                 DiscoveryAuthenticationType::None => "none",
+                DiscoveryAuthenticationType::Unknown => "?",
             })?;
         }
 
@@ -554,6 +566,50 @@ mod tests {
         assert!(matches!(
             cfg.email_provider.incoming_server[0].authentication[0],
             DiscoveryAuthenticationType::None
+        ));
+    }
+
+    #[test]
+    fn unknown_values_do_not_reject_the_document() {
+        let xml = r#"<?xml version="1.0"?>
+<clientConfig version="1.1">
+  <emailProvider id="x">
+    <domain>x</domain>
+    <incomingServer type="exchange">
+      <hostname>ews.x</hostname>
+    </incomingServer>
+    <incomingServer type="imap">
+      <hostname>imap.x</hostname>
+      <socketType>SSL</socketType>
+      <authentication>GSSAPI</authentication>
+      <authentication>plain</authentication>
+      <authentication>secure</authentication>
+      <authentication>passkey</authentication>
+    </incomingServer>
+    <outgoingServer type="smtp">
+      <hostname>smtp.x</hostname>
+      <socketType>quic</socketType>
+    </outgoingServer>
+  </emailProvider>
+</clientConfig>
+"#;
+
+        let cfg: DiscoveryAutoconfig = serde_xml_rs::from_str(xml).unwrap();
+        let incoming = &cfg.email_provider.incoming_server;
+
+        assert!(matches!(incoming[0].r#type, DiscoveryServerType::Unknown));
+        assert!(matches!(
+            incoming[1].authentication[..],
+            [
+                DiscoveryAuthenticationType::GsApi,
+                DiscoveryAuthenticationType::PasswordCleartext,
+                DiscoveryAuthenticationType::PasswordEncrypted,
+                DiscoveryAuthenticationType::Unknown,
+            ]
+        ));
+        assert!(matches!(
+            cfg.email_provider.outgoing_server[0].socket_type,
+            Some(DiscoverySecurityType::Unknown)
         ));
     }
 }

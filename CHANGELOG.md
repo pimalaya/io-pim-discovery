@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `check_resolver` and every `compose_*` return it for an input whose domain is not a host name, before any request.
 
+- **BREAKING**: Changed `DiscoveryServerType`, `DiscoverySecurityType` and `DiscoveryAuthenticationType` to carry `Unknown`.
+- **BREAKING**: Changed `DiscoveryDnsExchangeError` to carry `Rcode`.
+
+  A DNS answer whose response code is neither `NOERROR` nor `NXDOMAIN` fails the lookup instead of reading as no record.
+
+- Changed `DiscoveryKnownProvider::from_domain` to match a Microsoft label right under a public suffix only.
+
+  `live.example.org` is no longer taken for a Microsoft domain.
+
+- Changed the domain requirement to `=0.12.3`, without its `std` feature, pulled by `autoconfig`, `pacc` and `rfc6186` only.
+
+  The mechanisms other than `autoconfig`, whose XML parser is a std crate, no longer build any dependency with its `std` feature.
+
+- Changed the serde requirement to leave its default features out.
+- Changed `pacc` and `rfc6186` to pull psl, for the provider rules.
 - Changed the single-mechanism entry points of the compose client to yield nothing for a domain that is not a host name.
 - Changed `DiscoveryConfigCollector::finish` to list the encrypted endpoints first.
 - Changed `DiscoveryServiceConfig::probe_urls` to return nothing for an endpoint that is not `https`.
@@ -70,6 +85,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed URLs being built from a domain that is not a host name.
 
   The `DiscoveryIsp` URL helpers, `DiscoveryPacc::url` and the DAV and JMAP resolutions fail on a domain carrying a port, a path or a query.
+
+- Fixed an internationalized domain failing every DNS lookup.
+
+  Query names go out in their A-label form.
+
+- Fixed one unknown value rejecting a whole autoconfig document.
+
+  An unknown server type or socket type skips that server, an unknown authentication method is ignored.
+
+- Fixed the `GSSAPI` authentication method of autoconfig not being recognised.
+
+  The deprecated `plain` and `secure` names are read as the two password methods.
+
+- Fixed a failed TXT lookup aborting the RFC 6764 resolution.
+
+  It counts as no `path`, and the well-known probe runs.
 
 ## [0.11.0] - 2026-11-04
 

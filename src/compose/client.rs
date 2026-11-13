@@ -1780,6 +1780,34 @@ mod tests {
     }
 
     #[test]
+    fn an_internationalized_domain_is_asked_in_its_a_label_form() {
+        use std::io::{Read, Write};
+
+        // A resolver answering `NOERROR` to one query, which it hands back.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let query = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut len = [0u8; 2];
+            stream.read_exact(&mut len).unwrap();
+            let mut query = vec![0; u16::from_be_bytes(len) as usize];
+            stream.read_exact(&mut query).unwrap();
+
+            let header = [query[0], query[1], 0x81, 0x80, 0, 0, 0, 0, 0, 0, 0, 0];
+            stream.write_all(&[0, 12]).unwrap();
+            stream.write_all(&header).unwrap();
+            query
+        });
+
+        let resolver = format!("tcp://127.0.0.1:{port}").parse().unwrap();
+        let client = DiscoveryComposeClientStd::new(resolver, Tls::default());
+        client.check_resolver("anna@b\u{fc}cher.example").unwrap();
+
+        let query = query.join().unwrap();
+        assert!(query.windows(13).any(|label| label == b"xn--bcher-kva"));
+    }
+
+    #[test]
     fn secure_only_refuses_a_plain_http_resolver() {
         let resolver: Url = "http://127.0.0.1:9/dns-query".parse().unwrap();
         let client =

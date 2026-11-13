@@ -7,7 +7,8 @@
 //!    service (secure `_caldavs`/`_carddavs` first, plain
 //!    `_caldav`/`_carddav` next) to fix the origin host and port.
 //! 2. A TXT `path` lookup (§4) on that same SRV name: when present,
-//!    its path joined onto the origin is the first candidate.
+//!    its path joined onto the origin is the first candidate. A
+//!    failed lookup counts as no path.
 //! 3. A `.well-known` probe (§5) on the origin, following the
 //!    context-path redirect chain.
 //! 4. The origin itself.
@@ -243,7 +244,12 @@ impl DiscoveryCoroutine for DiscoveryDavResolve {
                     DiscoveryCoroutineState::Yielded(y)
                 }
                 DiscoveryCoroutineState::Complete(Err(err)) => {
-                    DiscoveryCoroutineState::Complete(Err(err.into()))
+                    debug!("skip failed TXT lookup, probe .well-known");
+                    trace!("{err:?}");
+
+                    let probe = DiscoveryWellKnown::new(origin.clone(), self.service);
+                    self.state = State::DiscoveryWellKnown { probe, origin };
+                    self.resume(None)
                 }
             },
             State::DiscoveryWellKnown { mut probe, origin } => match probe.resume(arg) {
@@ -449,5 +455,20 @@ mod tests {
         let output = resolve([none(), named, none(), none()], &replies);
         assert_eq!(output.root.as_str(), "https://dav.example.net/dav/");
         assert!(output.srv);
+    }
+
+    #[test]
+    fn a_failed_txt_lookup_counts_as_no_path() {
+        let redirect =
+            b"HTTP/1.1 301 Moved Permanently\r\nLocation: /dav/\r\nContent-Length: 0\r\n\r\n";
+        let challenge = b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"dav\"\r\nContent-Length: 0\r\n\r\n";
+
+        // The `_caldavs` record, then a TXT stream closing unanswered.
+        let none = || srv_reply(None);
+        let named = srv_reply(Some("dav.example.net"));
+        let replies = [Vec::new(), redirect.to_vec(), challenge.to_vec()];
+        let output = resolve([none(), named, none(), none()], &replies);
+
+        assert_eq!(output.root.as_str(), "https://dav.example.net/dav/");
     }
 }

@@ -16,7 +16,8 @@
 //! requests without performing any I/O, one module per mechanism or
 //! RFC. The client layer wraps them into standard, blocking clients
 //! over a stream. The CLI layer, behind the cli feature, exposes
-//! discovery as a command-line binary.
+//! discovery as a command-line binary. One mechanism needs std without
+//! the client layer: autoconfig, whose XML parser is a std crate.
 //!
 //! The compose module reduces the individual mechanisms into a single
 //! ranked list of service configurations, and the shared module holds

@@ -9,6 +9,7 @@
 
 use alloc::{format, string::ToString, vec::Vec};
 
+use psl::Type;
 use serde::{Deserialize, Serialize};
 
 use crate::compose::config::{
@@ -27,7 +28,8 @@ pub enum DiscoveryKnownProvider {
 }
 
 impl DiscoveryKnownProvider {
-    /// Matches a provider from an email domain.
+    /// Matches a provider from an email domain: its own domains, or
+    /// one of its labels right under a public suffix of the registries.
     pub fn from_domain(domain: &str) -> Option<Self> {
         let google = ["gmail.com", "googlemail.com"];
         if google.iter().any(|d| domain.eq_ignore_ascii_case(d)) {
@@ -39,15 +41,19 @@ impl DiscoveryKnownProvider {
         }
 
         // NOTE: Microsoft consumer domains come in country flavors
-        // (outlook.com.br, hotmail.fr, live.de, ...); match on the
-        // first label instead of maintaining the full list.
-        let label = domain.split('.').next().unwrap_or(domain);
+        // (outlook.com.br, hotmail.fr, live.de, ...); match its label
+        // right under a public suffix instead of keeping the full list.
+        let domain = domain.to_ascii_lowercase();
+        let (label, rest) = domain.split_once('.')?;
         let microsoft = ["outlook", "hotmail", "live"];
-        if microsoft.iter().any(|l| label.eq_ignore_ascii_case(l)) {
-            return Some(Self::Microsoft);
+        if !microsoft.contains(&label) {
+            return None;
         }
 
-        None
+        let suffix = psl::suffix(rest.as_bytes())?;
+        let registry = suffix.typ() == Some(Type::Icann) && suffix.as_bytes() == rest.as_bytes();
+
+        registry.then_some(Self::Microsoft)
     }
 
     /// Matches a provider from an MX exchange host, catching custom
@@ -393,5 +399,38 @@ mod tests {
                 .probe_urls()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn the_microsoft_labels_match_right_under_a_public_suffix_only() {
+        let hosted = [
+            "outlook.com",
+            "hotmail.fr",
+            "live.de",
+            "outlook.com.br",
+            "Hotmail.Co.UK",
+            "msn.com",
+        ];
+        for domain in hosted {
+            assert_eq!(
+                DiscoveryKnownProvider::from_domain(domain),
+                Some(DiscoveryKnownProvider::Microsoft),
+                "{domain}"
+            );
+        }
+
+        let others = [
+            "live.example.org",
+            "outlook.example.com",
+            "hotmail.github.io",
+            "live",
+        ];
+        for domain in others {
+            assert_eq!(
+                DiscoveryKnownProvider::from_domain(domain),
+                None,
+                "{domain}"
+            );
+        }
     }
 }

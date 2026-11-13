@@ -9,7 +9,12 @@ status: current
 The `compose` module reduces the individual mechanisms into a single ranked list of service configurations, so a caller (a setup wizard) gets one answer instead of orchestrating each probe.
 
 ### Requirement: Provider short-circuit first
-Composition SHALL reduce the fixed-provider rules first: when the email domain (or its MX records) matches a known provider (Google, Microsoft), the provider's own configs are produced and tag their source as `Provider`. Provider detection is exposed on its own (`provider`, `is_google`, `is_microsoft`).
+Composition SHALL reduce the fixed-provider rules first: when the email domain (or its MX records) matches a known provider (Google, Microsoft), the provider's own configs are produced and tag their source as `Provider`. Provider detection is exposed on its own (`provider`, `is_google`, `is_microsoft`). A provider's label (`outlook`, `hotmail`, `live`) SHALL match only right under a public suffix of the registries, per the Public Suffix List (`outlook.com`, `hotmail.co.uk`), never under a registrable or a private domain.
+
+#### Scenario: A provider's label under someone's domain
+- GIVEN the address `someone@live.example.org`
+- WHEN composition runs
+- THEN no fixed-provider config is produced and the MX records are asked
 
 ### Requirement: Ordered mechanism fan-out
 For the remaining mechanisms, composition SHALL run them in a fixed priority order (MX-derived provider, PACC, autoconfig ISP main / fallback / mailconf / ISPDB / MX provider, RFC 6186 SRV, RFC 6764 CalDAV/CardDAV, RFC 8620 JMAP), scoped to the services requested. `compose_raw`, and the CLI that prints it, SHALL concatenate their configs into one list in that order without deduplicating: each stays the answer of one source, and an endpoint named by several sources appears once per source, merging being the consumer's. `compose_all` and `compose_first` SHALL merge them into one ranked list for callers wanting a single answer (a setup wizard), the encrypted endpoints first and each group in mechanism order; when they merge a subdomain with its parent host, a resolved endpoint SHALL win over an unresolved one, and between two of the same kind the parent host SHALL win, the source and the trust following the endpoint kept. A subdomain SHALL merge with its parent host between two `https` endpoints only: an unencrypted endpoint SHALL neither merge with nor replace an encrypted one.

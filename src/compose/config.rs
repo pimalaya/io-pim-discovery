@@ -214,8 +214,9 @@ impl DiscoveryServiceConfig {
     }
 
     /// Flattens a Mozilla autoconfig document into one config per
-    /// incoming/outgoing server. Servers without a hostname are
-    /// skipped; a missing port falls back to the well-known port of
+    /// incoming/outgoing server. Servers without a hostname, or of an
+    /// unknown type or security, are skipped, as are unknown
+    /// authentication methods; a missing port falls back to the port of
     /// the service and security combination. `trust` tells what vouched
     /// for the document.
     #[cfg(feature = "autoconfig")]
@@ -242,12 +243,14 @@ impl DiscoveryServiceConfig {
                 DiscoveryServerType::Imap => DiscoveryService::Imap,
                 DiscoveryServerType::Pop3 => DiscoveryService::Pop3,
                 DiscoveryServerType::Smtp => DiscoveryService::Smtp,
+                DiscoveryServerType::Unknown => continue,
             };
 
             let security = match server.socket_type {
                 Some(DiscoverySecurityType::Tls) | None => DiscoverySecurity::Tls,
                 Some(DiscoverySecurityType::Starttls) => DiscoverySecurity::Starttls,
                 Some(DiscoverySecurityType::Plain) => DiscoverySecurity::Plain,
+                Some(DiscoverySecurityType::Unknown) => continue,
             };
 
             let Some(port) = server.port.or(default_port(service, security)) else {
@@ -631,6 +634,49 @@ mod tests {
         );
         assert_eq!(smtp.source, DiscoveryConfigSource::Srv);
         assert_eq!(smtp.trust, DiscoveryConfigTrust::Unauthenticated);
+    }
+
+    #[cfg(feature = "autoconfig")]
+    #[test]
+    fn an_autoconfig_keeps_the_servers_it_understands() {
+        let xml = r#"<clientConfig version="1.1">
+  <emailProvider id="x">
+    <incomingServer type="exchange">
+      <hostname>ews.example.com</hostname>
+    </incomingServer>
+    <incomingServer type="imap">
+      <hostname>imap.example.com</hostname>
+      <socketType>SSL</socketType>
+      <authentication>GSSAPI</authentication>
+      <authentication>plain</authentication>
+      <authentication>passkey</authentication>
+    </incomingServer>
+    <outgoingServer type="smtp">
+      <hostname>smtp.example.com</hostname>
+      <socketType>quic</socketType>
+      <authentication>password-cleartext</authentication>
+    </outgoingServer>
+  </emailProvider>
+</clientConfig>"#;
+
+        let document = serde_xml_rs::from_str(xml).unwrap();
+        let configs = DiscoveryServiceConfig::from_autoconfig(
+            &document,
+            "anna@example.com",
+            DiscoveryConfigSource::IspMain,
+            DiscoveryConfigTrust::Domain,
+        );
+
+        assert_eq!(configs.len(), 1, "{configs:?}");
+        assert_eq!(
+            configs[0].endpoint,
+            DiscoveryEndpoint::Tcp {
+                host: "imap.example.com".to_string(),
+                port: 993,
+                security: DiscoverySecurity::Tls,
+            },
+        );
+        assert_eq!(configs[0].auth, [DiscoveryAuthMethod::Password]);
     }
 
     #[test]

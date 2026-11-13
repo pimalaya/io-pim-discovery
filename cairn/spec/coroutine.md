@@ -15,7 +15,7 @@ Each mechanism SHALL implement `DiscoveryCoroutine`, resumed with the bytes read
 Every `WantsRead` / `WantsWrite` SHALL carry the URL of the endpoint it targets (the DNS resolver, or an HTTPS host), so the runtime routes the bytes to the correct stream when several are multiplexed.
 
 ### Requirement: Shared DNS transport
-DNS-backed mechanisms SHALL share one transport that speaks DNS-over-TCP (length-prefixed framing) or RFC 8484 DNS-over-HTTPS, picked from the resolver URL scheme. Query names are made absolute (trailing dot) before parsing, since the `domain` parser rejects relative names.
+DNS-backed mechanisms SHALL share one transport that speaks DNS-over-TCP (length-prefixed framing) or RFC 8484 DNS-over-HTTPS, picked from the resolver URL scheme. Query names are made absolute (trailing dot) and an internationalized name is turned into its A-label form before parsing, since the `domain` parser rejects relative names and non-ASCII labels. A response whose code is neither `NOERROR` nor `NXDOMAIN` SHALL fail the lookup with that code instead of reading as an empty answer; the resolver probe alone returns it as its result.
 
 ### Requirement: Std clients over a stream pool
 The client layer SHALL drive each coroutine end-to-end through a `DiscoveryStreamPool` that opens and reuses one stream per endpoint URL, with pluggable per-scheme factories (`tcp` for DNS, `https` for HTTP mechanisms). SRV discovery never opens HTTPS, so its client needs only the `tcp` factory. The `tcp` factory SHALL bound each connect, read and write by a timeout, ten seconds unless the caller registers another.

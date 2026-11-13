@@ -39,7 +39,7 @@ This project is composed of 3 feature-gated layers:
 
 | Spec | What is covered |
 |------|-----------------|
-| [Autoconfig] | Mozilla Thunderbird autoconfiguration: ISP main and well-known lookups, ISPDB, DNS MX retry and the DNS TXT mailconf redirect (requires `autoconfig`) |
+| [Autoconfig] | Mozilla Thunderbird autoconfiguration: ISP main and well-known lookups, ISPDB, DNS MX retry and the DNS TXT mailconf redirect (requires `autoconfig`, which needs std) |
 | [PACC] | Provider-authenticated client configuration: well-known JSON fetch with SHA-256 digest verification against the ua-auto-config TXT record (requires `pacc`) |
 | [6186] | DNS SRV mail discovery: imap, imaps and submission records assembled into one report (requires `rfc6186`) |
 | [6764] | CalDAV and CardDAV discovery: DNS SRV, DNS TXT context and well-known probe, chained into a context-root resolve (requires `rfc6764`) |

@@ -39,7 +39,7 @@ use log::trace;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use url::{ParseError, Url};
+use url::{Host, ParseError, Url};
 
 use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
@@ -95,10 +95,16 @@ pub struct DiscoveryPacc {
 impl DiscoveryPacc {
     /// Builds the well-known PACC URL for `domain`:
     /// `https://ua-auto-config.<domain>/.well-known/user-agent-configuration.json`.
+    /// Fails on a domain that is not a host name.
     pub fn url(domain: impl AsRef<str>) -> Result<Url, DiscoveryPaccError> {
         let d = domain.as_ref().trim_matches('.');
-        let url = format!("https://ua-auto-config.{d}/.well-known/user-agent-configuration.json");
-        Url::parse(&url).map_err(|err| DiscoveryPaccError::InvalidUrl(err, d.to_string()))
+        let invalid = |err| DiscoveryPaccError::InvalidUrl(err, d.to_string());
+
+        let host = Host::parse(d).map_err(invalid)?;
+        let url =
+            format!("https://ua-auto-config.{host}/.well-known/user-agent-configuration.json");
+
+        Url::parse(&url).map_err(invalid)
     }
 
     /// Builds a discoverer for `domain`. The `resolver` URL must use
@@ -231,5 +237,21 @@ impl DiscoveryCoroutine for DiscoveryPacc {
                 State::Done => panic!("DiscoveryPacc::resume called after completion"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::pacc::discover::DiscoveryPacc;
+
+    #[test]
+    fn a_domain_that_is_not_a_host_name_builds_no_url() {
+        assert!(DiscoveryPacc::url("example.org:8443/x?").is_err());
+
+        let url = DiscoveryPacc::url("example.org.").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://ua-auto-config.example.org/.well-known/user-agent-configuration.json"
+        );
     }
 }

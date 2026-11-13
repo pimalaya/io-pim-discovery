@@ -18,7 +18,7 @@ Every `WantsRead` / `WantsWrite` SHALL carry the URL of the endpoint it targets 
 DNS-backed mechanisms SHALL share one transport that speaks DNS-over-TCP (length-prefixed framing) or RFC 8484 DNS-over-HTTPS, picked from the resolver URL scheme. Query names are made absolute (trailing dot) before parsing, since the `domain` parser rejects relative names.
 
 ### Requirement: Std clients over a stream pool
-The client layer SHALL drive each coroutine end-to-end through a `DiscoveryStreamPool` that opens and reuses one stream per endpoint URL, with pluggable per-scheme factories (`tcp` for DNS, `https` for HTTP mechanisms). SRV discovery never opens HTTPS, so its client needs only the `tcp` factory.
+The client layer SHALL drive each coroutine end-to-end through a `DiscoveryStreamPool` that opens and reuses one stream per endpoint URL, with pluggable per-scheme factories (`tcp` for DNS, `https` for HTTP mechanisms). SRV discovery never opens HTTPS, so its client needs only the `tcp` factory. The `tcp` factory SHALL bound each connect, read and write by a timeout, ten seconds unless the caller registers another.
 
 ### Requirement: Redirects stay on HTTP and never leave TLS
 The shared redirect walk SHALL follow a redirect to an `https` URL, and to an `http` URL only from an `http` one. A redirect to any other scheme, or from `https` to `http`, SHALL end the walk without a result, as a looping chain does.

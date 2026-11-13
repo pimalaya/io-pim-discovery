@@ -22,7 +22,7 @@ use alloc::{
 };
 
 use thiserror::Error;
-use url::{ParseError, Url};
+use url::{Host, ParseError, Url};
 
 use crate::{
     autoconfig::config::DiscoveryAutoconfig,
@@ -52,6 +52,7 @@ pub struct DiscoveryIsp {
 impl DiscoveryIsp {
     /// Builds the URL for the main ISP location
     /// (`http[s]://autoconfig.<domain>/mail/config-v1.1.xml?...`).
+    /// Like its siblings, fails on a domain that is not a host name.
     pub fn main_url(
         local_part: impl AsRef<str>,
         domain: impl AsRef<str>,
@@ -59,10 +60,9 @@ impl DiscoveryIsp {
     ) -> Result<Url, ParseError> {
         let domain = domain.as_ref().trim_matches('.');
         let email = format!("{}@{domain}", local_part.as_ref());
-        let s = if secure { "s" } else { "" };
-        let url =
-            format!("http{s}://autoconfig.{domain}/mail/config-v1.1.xml?emailaddress={email}");
-        Url::parse(&url)
+        let host = format!("autoconfig.{}", Host::parse(domain)?);
+
+        Self::host_url(email, host, secure)
     }
 
     /// Builds the URL of the main ISP location served by `host` for
@@ -74,7 +74,7 @@ impl DiscoveryIsp {
         host: impl AsRef<str>,
         secure: bool,
     ) -> Result<Url, ParseError> {
-        let host = host.as_ref().trim_matches('.');
+        let host = Host::parse(host.as_ref().trim_matches('.'))?;
         let s = if secure { "s" } else { "" };
         let mut url = Url::parse(&format!("http{s}://{host}/mail/config-v1.1.xml"))?;
         url.query_pairs_mut()
@@ -85,7 +85,7 @@ impl DiscoveryIsp {
     /// Builds the URL for the alternative ISP location
     /// (`http[s]://<domain>/.well-known/autoconfig/mail/config-v1.1.xml`).
     pub fn fallback_url(domain: impl AsRef<str>, secure: bool) -> Result<Url, ParseError> {
-        let domain = domain.as_ref().trim_matches('.');
+        let domain = Host::parse(domain.as_ref().trim_matches('.'))?;
         let s = if secure { "s" } else { "" };
         let url = format!("http{s}://{domain}/.well-known/autoconfig/mail/config-v1.1.xml");
         Url::parse(&url)
@@ -94,7 +94,7 @@ impl DiscoveryIsp {
     /// Builds the URL for the Thunderbird ISPDB
     /// (`http[s]://autoconfig.thunderbird.net/v1.1/<domain>`).
     pub fn db_url(domain: impl AsRef<str>, secure: bool) -> Result<Url, ParseError> {
-        let domain = domain.as_ref().trim_matches('.');
+        let domain = Host::parse(domain.as_ref().trim_matches('.'))?;
         let s = if secure { "s" } else { "" };
         let url = format!("http{s}://autoconfig.thunderbird.net/v1.1/{domain}");
         Url::parse(&url)
@@ -154,5 +154,44 @@ impl DiscoveryCoroutine for DiscoveryIsp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{string::ToString, vec::Vec};
+
+    use crate::autoconfig::isp::DiscoveryIsp;
+
+    #[test]
+    fn the_address_reaches_the_query_as_one_value() {
+        let url = DiscoveryIsp::main_url("anna+lists&x=1#y", "example.org", true).unwrap();
+        let pairs: Vec<_> = url.query_pairs().into_owned().collect();
+
+        assert_eq!(
+            pairs,
+            [(
+                "emailaddress".to_string(),
+                "anna+lists&x=1#y@example.org".to_string()
+            )]
+        );
+        assert_eq!(url.host_str(), Some("autoconfig.example.org"));
+        assert_eq!(url.fragment(), None);
+    }
+
+    #[test]
+    fn a_domain_that_is_not_a_host_name_builds_no_url() {
+        let steering = "example.org:8443/x?";
+
+        assert!(DiscoveryIsp::main_url("anna", steering, true).is_err());
+        assert!(DiscoveryIsp::fallback_url(steering, true).is_err());
+        assert!(DiscoveryIsp::host_url("anna@example.org", steering, true).is_err());
+        assert!(DiscoveryIsp::db_url("example.org/../../x", true).is_err());
+
+        let url = DiscoveryIsp::db_url("example.org.", true).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://autoconfig.thunderbird.net/v1.1/example.org"
+        );
     }
 }

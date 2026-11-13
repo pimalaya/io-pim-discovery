@@ -10,8 +10,9 @@
 //! per config.
 //!
 //! Mechanism failures are logged and skipped: only an invalid email
-//! address fails the whole compose. Mechanisms irrelevant to the
-//! requested services are never started.
+//! address, a domain that is not a host name or an unusable resolver
+//! fails the whole compose. Mechanisms irrelevant to the requested
+//! services are never started.
 //!
 //! [`compose_all`](DiscoveryComposeClientStd::compose_all) waits for
 //! every mechanism to finish. [`compose_all_within`](DiscoveryComposeClientStd::compose_all_within)
@@ -38,7 +39,7 @@ use alloc::{
 use log::{debug, trace};
 use pimalaya_stream::tls::Tls;
 use thiserror::Error;
-use url::Url;
+use url::{Host, Url};
 
 #[cfg(feature = "autoconfig")]
 use crate::autoconfig::{
@@ -87,6 +88,9 @@ pub enum DiscoveryComposeClientStdError {
     /// The input is not a valid `local@domain` email address.
     #[error("Email address `{0}` is missing the `@` separator")]
     InvalidEmail(String),
+    /// The domain of the input is not a host name.
+    #[error("Domain `{0}` is not a valid host name")]
+    InvalidDomain(String),
     /// Secure-only mode refuses a resolver reached over plain HTTP.
     #[error("DNS resolver `{0}` is plain HTTP, refused in secure-only mode")]
     PlainResolver(Url),
@@ -161,9 +165,10 @@ impl DiscoveryComposeClientStd {
     /// one SOA question about the domain of `input` (an address or a
     /// bare domain). `NOERROR` and `NXDOMAIN` are answers; no answer or
     /// any other response code is an error naming the resolver, as is a
-    /// plain `http://` resolver in secure-only mode. Every `compose_*`
-    /// entry point runs it first; callers of the single mechanisms run
-    /// it themselves.
+    /// plain `http://` resolver in secure-only mode, and a domain that
+    /// is not a host name before any request. Every `compose_*` entry
+    /// point runs it first; callers of the single mechanisms run it
+    /// themselves.
     pub fn check_resolver(&self, input: &str) -> Result<(), DiscoveryComposeClientStdError> {
         if self.secure_only && self.dns.scheme() == "http" {
             return Err(DiscoveryComposeClientStdError::PlainResolver(
@@ -176,7 +181,7 @@ impl DiscoveryComposeClientStd {
             reason,
         };
 
-        let probe = DiscoveryDnsProbe::new(domain_part(input), self.dns.clone());
+        let probe = DiscoveryDnsProbe::new(domain_part(input)?, self.dns.clone());
         match run(&mut self.pool(), probe) {
             Ok(rcode) if rcode.is_answer() => Ok(()),
             Ok(rcode) => Err(failed(format!("answered {}", rcode.name()))),
@@ -202,7 +207,8 @@ impl DiscoveryComposeClientStd {
     /// completed in time is reduced and returned. Meant for interactive
     /// callers (a setup wizard) where a single unreachable endpoint must
     /// not stall the whole discovery. An empty result means nothing
-    /// completed in time.
+    /// completed in time. The passes that follow (DAV roots, auth probe,
+    /// OAuth resolution) get what is left of `deadline`.
     pub fn compose_all_within(
         &self,
         email: &str,
@@ -245,7 +251,7 @@ impl DiscoveryComposeClientStd {
             .filter(|config| services.is_empty() || services.contains(&config.service))
             .collect();
 
-        self.resolve_oauth(&mut configs);
+        self.resolve_oauth(&mut configs, None);
 
         Ok(configs)
     }
@@ -287,7 +293,9 @@ impl DiscoveryComposeClientStd {
     #[cfg(feature = "autoconfig")]
     pub fn autoconfig(&self, email: &str) -> Vec<DiscoveryServiceConfig> {
         let local = email.split_once('@').map(|(local, _)| local).unwrap_or("");
-        let domain = domain_part(email);
+        let Ok(domain) = domain_part(email) else {
+            return Vec::new();
+        };
 
         let mut configs = Vec::new();
         configs.extend(self.run_isp_main(local, &domain, email));
@@ -302,28 +310,40 @@ impl DiscoveryComposeClientStd {
     /// or a bare domain). Raw.
     #[cfg(feature = "rfc6186")]
     pub fn srv(&self, input: &str) -> Vec<DiscoveryServiceConfig> {
-        self.run_srv(&domain_part(input))
+        match domain_part(input) {
+            Ok(domain) => self.run_srv(&domain),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Runs PACC discovery for `input` (an email address or a bare
     /// domain). Raw.
     #[cfg(feature = "pacc")]
     pub fn pacc(&self, input: &str) -> Vec<DiscoveryServiceConfig> {
-        self.run_pacc(&domain_part(input))
+        match domain_part(input) {
+            Ok(domain) => self.run_pacc(&domain),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Runs RFC 6764 CalDAV or CardDAV resolution for `input` (an
     /// email address or a bare domain). Raw.
     #[cfg(feature = "rfc6764")]
     pub fn dav(&self, input: &str, service: DiscoveryDavService) -> Vec<DiscoveryServiceConfig> {
-        self.run_dav(&domain_part(input), service)
+        match domain_part(input) {
+            Ok(domain) => self.run_dav(&domain, service),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Runs RFC 8620 JMAP session resolution for `input` (an email
     /// address or a bare domain). Raw.
     #[cfg(feature = "rfc8620")]
     pub fn jmap(&self, input: &str) -> Vec<DiscoveryServiceConfig> {
-        self.run_jmap(&domain_part(input))
+        match domain_part(input) {
+            Ok(domain) => self.run_jmap(&domain),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Probes `url` for the authentication schemes it advertises on an
@@ -398,8 +418,8 @@ impl DiscoveryComposeClientStd {
             None => self.parallel_outputs(email, &services)?,
         };
         // Before the reduction, so it can prefer a resolved endpoint.
-        let left = deadline.map(|deadline| deadline.saturating_sub(started.elapsed()));
-        self.resolve_dav_roots(&mut outputs, left);
+        let left = || deadline.map(|deadline| deadline.saturating_sub(started.elapsed()));
+        self.resolve_dav_roots(&mut outputs, left());
         let mut collector = DiscoveryConfigCollector::new(services);
 
         for configs in outputs {
@@ -412,8 +432,8 @@ impl DiscoveryComposeClientStd {
         }
 
         let mut configs = collector.finish();
-        self.probe(&mut configs);
-        self.resolve_oauth(&mut configs);
+        self.probe(&mut configs, left());
+        self.resolve_oauth(&mut configs, left());
 
         debug!("end of config compose");
         trace!("{configs:?}");
@@ -535,12 +555,12 @@ impl DiscoveryComposeClientStd {
     ) -> Result<Plan, DiscoveryComposeClientStdError> {
         let email = email.trim();
 
-        let Some((local, domain)) = email.split_once('@') else {
+        let Some((local, _)) = email.split_once('@') else {
             return Err(DiscoveryComposeClientStdError::InvalidEmail(
                 email.to_string(),
             ));
         };
-        let domain = domain.trim_matches('.').to_ascii_lowercase();
+        let domain = domain_part(email)?;
 
         let wants = |service: DiscoveryService| services.is_empty() || services.contains(&service);
         let wants_mail = wants(DiscoveryService::Imap)
@@ -634,10 +654,10 @@ impl DiscoveryComposeClientStd {
     /// Resolves every `OauthIssuer` auth method in place: fetches the
     /// issuer's RFC 8414 metadata and replaces the bare issuer with
     /// the concrete grants it advertises. Each distinct issuer is
-    /// resolved once, in parallel; unresolvable issuers are left as
-    /// they were.
+    /// resolved once, in parallel; issuers that are unresolvable, or
+    /// not resolved by `deadline`, are left as they were.
     #[cfg(feature = "rfc8414")]
-    fn resolve_issuers(&self, configs: &mut [DiscoveryServiceConfig]) {
+    fn resolve_issuers(&self, configs: &mut [DiscoveryServiceConfig], deadline: Option<Duration>) {
         let issuers: BTreeSet<String> = configs
             .iter()
             .flat_map(|config| &config.auth)
@@ -651,17 +671,21 @@ impl DiscoveryComposeClientStd {
             return;
         }
 
-        let resolved: BTreeMap<String, Vec<DiscoveryAuthMethod>> = thread::scope(|scope| {
-            let handles: Vec<_> = issuers
-                .iter()
-                .map(|issuer| scope.spawn(move || (issuer.clone(), self.resolve_issuer(issuer))))
-                .collect();
+        let client = Arc::new(self.clone_shallow());
+        let tasks: Vec<_> = issuers
+            .iter()
+            .cloned()
+            .map(|issuer| {
+                let client = client.clone();
+                move || client.resolve_issuer(&issuer)
+            })
+            .collect();
 
-            handles
-                .into_iter()
-                .filter_map(|handle| handle.join().ok())
-                .collect()
-        });
+        let resolved: BTreeMap<String, Vec<DiscoveryAuthMethod>> = issuers
+            .into_iter()
+            .zip(collect(tasks, deadline))
+            .filter_map(|(issuer, methods)| Some((issuer, methods?)))
+            .collect();
 
         for config in configs.iter_mut() {
             let mut auth = Vec::new();
@@ -683,16 +707,24 @@ impl DiscoveryComposeClientStd {
     /// No-op when RFC 8414 is not compiled in: discovered issuers stay
     /// as bare `OauthIssuer` methods.
     #[cfg(not(feature = "rfc8414"))]
-    fn resolve_issuers(&self, _configs: &mut [DiscoveryServiceConfig]) {}
+    fn resolve_issuers(
+        &self,
+        _configs: &mut [DiscoveryServiceConfig],
+        _deadline: Option<Duration>,
+    ) {
+    }
 
     /// Resolves the OAuth issuers of `configs` with the RFC 9728
     /// protected resource metadata of their HTTP endpoints: a config
     /// without OAuth gains the authorization servers the metadata
     /// names, then every OAuth grant is bound to the resource and its
     /// advertised scopes. Each distinct endpoint is fetched once, in
-    /// parallel; one without metadata leaves its configs as they were.
+    /// parallel; one without metadata, or not answering by `deadline`,
+    /// leaves its configs as they were.
     #[cfg(feature = "rfc9728")]
-    fn resolve_oauth(&self, configs: &mut [DiscoveryServiceConfig]) {
+    fn resolve_oauth(&self, configs: &mut [DiscoveryServiceConfig], deadline: Option<Duration>) {
+        let started = Instant::now();
+
         let urls: BTreeSet<String> = configs
             .iter()
             .filter_map(|config| match &config.endpoint {
@@ -701,20 +733,29 @@ impl DiscoveryComposeClientStd {
             })
             .collect();
 
-        let resources: BTreeMap<String, DiscoveryOauthResourceMetadata> = thread::scope(|scope| {
-            let handles: Vec<_> = urls
-                .iter()
-                .filter_map(|raw| Some((raw, Url::parse(raw).ok()?)))
-                .map(|(raw, url)| {
-                    scope.spawn(move || Some((raw.clone(), self.oauth_resource(&url)?)))
-                })
-                .collect();
+        let urls: Vec<(String, Url)> = urls
+            .into_iter()
+            .filter_map(|raw| {
+                let url = Url::parse(&raw).ok()?;
+                Some((raw, url))
+            })
+            .collect();
 
-            handles
-                .into_iter()
-                .filter_map(|handle| handle.join().ok().flatten())
-                .collect()
-        });
+        let client = Arc::new(self.clone_shallow());
+        let tasks: Vec<_> = urls
+            .iter()
+            .map(|(_, url)| {
+                let client = client.clone();
+                let url = url.clone();
+                move || client.oauth_resource(&url)
+            })
+            .collect();
+
+        let resources: BTreeMap<String, DiscoveryOauthResourceMetadata> = urls
+            .into_iter()
+            .zip(collect(tasks, deadline))
+            .filter_map(|((raw, _), metadata)| Some((raw, metadata.flatten()?)))
+            .collect();
 
         let resource_of = |config: &DiscoveryServiceConfig| match &config.endpoint {
             DiscoveryEndpoint::Http(url) => resources.get(url),
@@ -733,7 +774,8 @@ impl DiscoveryComposeClientStd {
             }
         }
 
-        self.resolve_issuers(configs);
+        let left = deadline.map(|deadline| deadline.saturating_sub(started.elapsed()));
+        self.resolve_issuers(configs, left);
 
         for config in configs.iter_mut() {
             if let Some(metadata) = resource_of(config) {
@@ -746,8 +788,8 @@ impl DiscoveryComposeClientStd {
     /// Without RFC 9728, OAuth resolution is the RFC 8414 issuer pass
     /// alone.
     #[cfg(not(feature = "rfc9728"))]
-    fn resolve_oauth(&self, configs: &mut [DiscoveryServiceConfig]) {
-        self.resolve_issuers(configs);
+    fn resolve_oauth(&self, configs: &mut [DiscoveryServiceConfig], deadline: Option<Duration>) {
+        self.resolve_issuers(configs, deadline);
     }
 
     /// Resolves one issuer to the grants its RFC 8414 metadata
@@ -813,6 +855,12 @@ impl DiscoveryComposeClientStd {
 
     /// Drops the configs whose endpoint is unencrypted when
     /// secure-only.
+    #[cfg(any(
+        feature = "autoconfig",
+        feature = "pacc",
+        feature = "rfc6764",
+        feature = "rfc8620"
+    ))]
     fn keep_secure(&self, mut configs: Vec<DiscoveryServiceConfig>) -> Vec<DiscoveryServiceConfig> {
         if self.secure_only {
             configs.retain(|config| {
@@ -875,19 +923,10 @@ impl DiscoveryComposeClientStd {
                 }
             })
             .collect();
-        let roots: Vec<Option<Url>> = match deadline {
-            Some(deadline) => collect_within(tasks, deadline)
-                .into_iter()
-                .map(Option::flatten)
-                .collect(),
-            None => thread::scope(|scope| {
-                let handles: Vec<_> = tasks.into_iter().map(|task| scope.spawn(task)).collect();
-                handles
-                    .into_iter()
-                    .map(|handle| handle.join().unwrap_or(None))
-                    .collect()
-            }),
-        };
+        let roots: Vec<Option<Url>> = collect(tasks, deadline)
+            .into_iter()
+            .map(Option::flatten)
+            .collect();
 
         for config in outputs.iter_mut().flatten() {
             let Some(target) = dav_root_target(config) else {
@@ -926,43 +965,41 @@ impl DiscoveryComposeClientStd {
     /// Probes each config's endpoints for their advertised
     /// authentication schemes, in parallel, and refines the configs
     /// in place. Within one config, the URLs are tried in order until
-    /// one advertises any scheme.
+    /// one advertises any scheme. A config whose probe misses
+    /// `deadline` stays as it was.
     #[cfg(feature = "rfc8620")]
-    fn probe(&self, configs: &mut [DiscoveryServiceConfig]) {
-        let schemes: Vec<Option<Vec<String>>> = thread::scope(|scope| {
-            let handles: Vec<_> = configs
-                .iter()
-                .map(|config| {
-                    let urls = config.probe_urls();
-                    scope.spawn(move || {
-                        for url in urls {
-                            debug!("probe endpoint authentication schemes");
-                            trace!("{url}");
+    fn probe(&self, configs: &mut [DiscoveryServiceConfig], deadline: Option<Duration>) {
+        let client = Arc::new(self.clone_shallow());
+        let tasks: Vec<_> = configs
+            .iter()
+            .map(|config| {
+                let client = client.clone();
+                let urls = config.probe_urls();
+                move || {
+                    for url in urls {
+                        debug!("probe endpoint authentication schemes");
+                        trace!("{url}");
 
-                            match run(&mut self.pool(), DiscoveryProbeAuth::new(url)) {
-                                Ok(schemes) if !schemes.is_empty() => return Some(schemes),
-                                // Nothing learned at this URL: the
-                                // config's next URL gets its turn.
-                                Ok(_) => {}
-                                Err(err) => {
-                                    debug!("skip failed auth probe");
-                                    trace!("{err:?}");
-                                }
+                        match run(&mut client.pool(), DiscoveryProbeAuth::new(url)) {
+                            Ok(schemes) if !schemes.is_empty() => return Some(schemes),
+                            // Nothing learned at this URL: the
+                            // config's next URL gets its turn.
+                            Ok(_) => {}
+                            Err(err) => {
+                                debug!("skip failed auth probe");
+                                trace!("{err:?}");
                             }
                         }
-                        None
-                    })
-                })
-                .collect();
+                    }
+                    None
+                }
+            })
+            .collect();
 
-            handles
-                .into_iter()
-                .map(|handle| handle.join().unwrap_or(None))
-                .collect()
-        });
+        let schemes = collect(tasks, deadline);
 
         for (config, schemes) in configs.iter_mut().zip(schemes) {
-            if let Some(schemes) = schemes {
+            if let Some(Some(schemes)) = schemes {
                 config.refine_auth(&schemes);
             }
         }
@@ -972,7 +1009,7 @@ impl DiscoveryComposeClientStd {
     /// compiled in: configs keep the auth methods their mechanism
     /// reported.
     #[cfg(not(feature = "rfc8620"))]
-    fn probe(&self, _configs: &mut [DiscoveryServiceConfig]) {}
+    fn probe(&self, _configs: &mut [DiscoveryServiceConfig], _deadline: Option<Duration>) {}
 
     /// Detects the fixed provider hosting `email`, with what vouches
     /// for the match: the domain rule first, then MX-based detection.
@@ -981,7 +1018,7 @@ impl DiscoveryComposeClientStd {
         &self,
         email: &str,
     ) -> Option<(DiscoveryKnownProvider, DiscoveryConfigTrust)> {
-        let domain = domain_part(email);
+        let domain = domain_part(email).ok()?;
 
         if let Some(provider) = DiscoveryKnownProvider::from_domain(&domain) {
             return Some((provider, DiscoveryConfigTrust::Rule));
@@ -1362,19 +1399,23 @@ impl DiscoveryComposeClientStd {
     }
 }
 
-/// The lowercased, dot-trimmed domain part of an email address, or the
-/// whole input when it carries no `@`.
-fn domain_part(email: &str) -> String {
+/// The domain part of an email address, or the whole input when it
+/// carries no `@`, as a host name: trimmed of whitespace and dots, in
+/// its lowercased ASCII form. An error when it is not a host name.
+fn domain_part(email: &str) -> Result<String, DiscoveryComposeClientStdError> {
     let domain = email
         .split_once('@')
         .map(|(_, domain)| domain)
-        .unwrap_or(email);
-    normalize_domain(domain)
-}
+        .unwrap_or(email)
+        .trim()
+        .trim_matches('.');
 
-/// Lowercases and trims surrounding whitespace and dots from a domain.
-fn normalize_domain(domain: &str) -> String {
-    domain.trim().trim_matches('.').to_ascii_lowercase()
+    match Host::parse(domain) {
+        Ok(Host::Domain(domain)) => Ok(domain),
+        _ => Err(DiscoveryComposeClientStdError::InvalidDomain(
+            domain.to_string(),
+        )),
+    }
 }
 
 /// Pumps one discovery coroutine through the pool until completion.
@@ -1417,12 +1458,6 @@ where
     }
 }
 
-/// Runs each task on its own detached thread and collects results by
-/// index, waiting no longer than `deadline` in total. A slot stays
-/// `None` when its task has not reported by the deadline; that thread
-/// keeps running in the background and its result is dropped when it
-/// finally sends to the now-disconnected channel. Order matches the
-/// input, never completion order.
 /// The service and origin to probe for `config`'s DAV context root: an
 /// advertised (not yet resolved) CalDAV or CardDAV endpoint whose URL
 /// carries no path. `None` for anything else.
@@ -1451,12 +1486,44 @@ fn dav_root_target(config: &DiscoveryServiceConfig) -> Option<(DiscoveryDavServi
     Some((service, url))
 }
 
+/// Runs each task on its own thread and collects results by index:
+/// within `deadline` when there is one, as [`collect_within`] does,
+/// else until every task ends.
+#[cfg(any(feature = "rfc6764", feature = "rfc8414", feature = "rfc8620"))]
+fn collect<T, F>(tasks: Vec<F>, deadline: Option<Duration>) -> Vec<Option<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match deadline {
+        Some(deadline) => collect_within(tasks, deadline),
+        None => thread::scope(|scope| {
+            let handles: Vec<_> = tasks.into_iter().map(|task| scope.spawn(task)).collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().ok())
+                .collect()
+        }),
+    }
+}
+
+/// Runs each task on its own detached thread and collects results by
+/// index, waiting no longer than `deadline` in total. A slot stays
+/// `None` when its task has not reported by the deadline; that thread
+/// keeps running in the background and its result is dropped when it
+/// finally sends to the now-disconnected channel. Order matches the
+/// input, never completion order. No task starts once no time is left.
 fn collect_within<T, F>(tasks: Vec<F>, deadline: Duration) -> Vec<Option<T>>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
     let count = tasks.len();
+
+    if deadline.is_zero() {
+        return (0..count).map(|_| None).collect();
+    }
+
     let (tx, rx) = mpsc::channel();
 
     for (index, task) in tasks.into_iter().enumerate() {
@@ -1493,6 +1560,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "rfc6764")]
+    use crate::compose::config::DiscoveryConfigSource;
 
     /// A local port nothing listens on: connections are refused at once.
     fn closed_resolver() -> Url {
@@ -1654,6 +1723,60 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("did not answer"), "{err}");
+    }
+
+    #[cfg(feature = "rfc8620")]
+    #[test]
+    fn the_auth_and_oauth_passes_stop_at_the_deadline() {
+        // A host that accepts and says nothing for three seconds.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_secs(3));
+                    drop(stream);
+                });
+            }
+        });
+
+        let client = DiscoveryComposeClientStd::new(closed_resolver(), Tls::default());
+        let url = format!("https://127.0.0.1:{port}/jmap/session");
+        let trust = DiscoveryConfigTrust::Domain;
+        let mut configs = vec![DiscoveryServiceConfig::from_jmap(url, &[], trust)];
+
+        let deadline = Some(Duration::from_millis(200));
+        let started = Instant::now();
+        client.probe(&mut configs, deadline);
+        client.resolve_oauth(&mut configs, deadline);
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "returned after {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn a_domain_that_is_not_a_host_name_is_an_error() {
+        let client = DiscoveryComposeClientStd::new(closed_resolver(), Tls::default());
+        let email = "anna@example.org:8443/x?";
+
+        let err = client.compose_raw(email, BTreeSet::new()).unwrap_err();
+        assert!(
+            matches!(err, DiscoveryComposeClientStdError::InvalidDomain(_)),
+            "{err}"
+        );
+
+        let err = client.check_resolver(email).unwrap_err();
+        assert!(err.to_string().contains("not a valid host name"), "{err}");
+
+        assert_eq!(domain_part(" Anna@Example.ORG. ").unwrap(), "example.org");
+        assert_eq!(
+            domain_part("b\u{fc}cher.example").unwrap(),
+            "xn--bcher-kva.example"
+        );
+        assert!(domain_part("anna@192.0.2.1").is_err());
     }
 
     #[test]

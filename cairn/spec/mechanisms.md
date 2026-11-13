@@ -33,3 +33,11 @@ The `rfc8414` and `rfc9728` mechanisms SHALL fetch OAuth 2.0 authorization-serve
 
 ### Requirement: WWW-Authenticate probe
 An HTTP endpoint's advertised schemes MAY be refined by a `DiscoveryProbeAuth` request that reads the `WWW-Authenticate` challenge, so a config's auth reflects what the server actually challenges for rather than only what a document claimed.
+
+### Requirement: URLs take host names and encoded values
+Every URL a mechanism builds from a domain, an SRV target or an alias target SHALL take it as a host name and fail otherwise, so that no port, path, query or user part enters through it: the autoconfig URL helpers, the PACC well-known URL, and the origins of the RFC 6764 and RFC 8620 resolutions. The autoconfig `emailaddress` parameter SHALL carry the address form-encoded, as one value.
+
+#### Scenario: A plus sign in the local part
+- GIVEN the address `anna+lists@example.org`
+- WHEN the ISP main URL is built
+- THEN its `emailaddress` parameter decodes to `anna+lists@example.org`

@@ -23,7 +23,7 @@ For the remaining mechanisms, composition SHALL run them in a fixed priority ord
 The client SHALL expose `compose_all` (every reachable config), `compose_first` (the first mechanism, in priority order, that yields one), and `compose_raw` (per-mechanism output without merging). Each mechanism is also reachable directly (`autoconfig`, `srv`, `pacc`, `dav`, `jmap`, `auth`, `oauth_server`, `oauth_resource`).
 
 ### Requirement: Deadline-bounded composition
-`compose_all_within` SHALL run each mechanism on its own detached thread and return only the configs that completed within a caller-supplied timeout. Mechanisms still running at the deadline are abandoned; they finish in the background and their output is dropped. This keeps an interactive caller responsive: a single unreachable endpoint (a firewalled port, a black-hole host) does not stall the whole fan-out until the OS connect timeout expires.
+`compose_all_within` SHALL run each mechanism on its own detached thread and return only the configs that completed within a caller-supplied timeout. Mechanisms still running at the deadline are abandoned; they finish in the background and their output is dropped. This keeps an interactive caller responsive: a single unreachable endpoint (a firewalled port, a black-hole host) does not stall the whole fan-out until the OS connect timeout expires. The passes that follow (the DAV root resolution, the auth refinement and the OAuth resolution) SHALL run within what is left of the timeout: a task of theirs still running at the deadline is abandoned and its config stays as it was, and no pass SHALL start once no time is left.
 
 ### Requirement: Auth refinement
 A composed config's advertised auth MAY be refined against a live `WWW-Authenticate` probe of its `https` endpoint: probed schemes replace account-level claims (a password claim drops when only bearer is challenged), while an OAuth issuer is preserved. An endpoint that is not `https` SHALL NOT be probed, and its config SHALL keep the auth its mechanism reported.
@@ -103,3 +103,11 @@ Every config SHALL carry a `trust` telling what vouches that it belongs to the a
 - GIVEN a domain whose `autoconfig.<domain>` is an alias of a provider's host serving a certificate for its own name
 - WHEN email discovery runs
 - THEN the configs are tagged `IspMain` with `trust` `unauthenticated`, where a document served by `autoconfig.<domain>` itself is `domain`
+
+### Requirement: The domain is a host name
+Composition SHALL parse the domain of its input, an address or a bare domain, as a host name once, and use its lowercased ASCII form for every lookup and URL. A domain that is not a host name (one carrying a port, a path, a query or a user part, or an IP address) SHALL fail `check_resolver` and every `compose_*` with an error naming it, before any request, and SHALL make a single-mechanism entry point yield nothing.
+
+#### Scenario: A domain carrying a port and a path
+- GIVEN the input `anna@example.org:8443/x?`
+- WHEN `compose_raw` runs
+- THEN it returns an error naming the domain, and no request is made

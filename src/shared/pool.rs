@@ -19,13 +19,17 @@ use std::{
     boxed::Box,
     collections::HashMap,
     io::{Read, Write},
-    net::TcpStream,
+    net::{TcpStream, ToSocketAddrs},
     string::String,
+    time::Duration,
 };
 
 use anyhow::{Error, Result, bail};
 use log::trace;
 use url::Url;
+
+/// Connect, read and write timeout of the default `tcp` factory.
+const TCP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Open marker for everything the pool can store. Auto-implemented
 /// for any blocking `Read + Write`.
@@ -76,19 +80,28 @@ impl Default for DiscoveryStreamPool {
 }
 
 impl DiscoveryStreamPool {
-    /// Builds a pool with the default `tcp` factory pre-registered.
-    /// Callers plug additional schemes (typically `http`/`https` via
-    /// [`with_http_factories`]) through [`with_factory`].
+    /// Builds a pool with the default `tcp` factory pre-registered,
+    /// timing out after ten seconds ([`with_tcp_factory`] sets
+    /// another). Callers plug additional schemes (typically
+    /// `http`/`https` via [`with_http_factories`]) through
+    /// [`with_factory`].
     ///
     /// [`with_factory`]: DiscoveryStreamPool::with_factory
     /// [`with_http_factories`]: DiscoveryStreamPool::with_http_factories
+    /// [`with_tcp_factory`]: DiscoveryStreamPool::with_tcp_factory
     pub fn new() -> Self {
         let pool = Self {
             streams: HashMap::new(),
             factories: HashMap::new(),
         };
 
-        pool.with_factory("tcp", |url: &Url| -> Result<TcpStream> {
+        pool.with_tcp_factory(TCP_TIMEOUT)
+    }
+
+    /// Registers the `tcp` factory: plain TCP streams whose connect,
+    /// reads and writes each give up after `timeout`.
+    pub fn with_tcp_factory(self, timeout: Duration) -> Self {
+        self.with_factory("tcp", move |url: &Url| -> Result<TcpStream> {
             let Some(host) = url.host_str() else {
                 bail!("TCP URL `{url}` has no host");
             };
@@ -97,7 +110,23 @@ impl DiscoveryStreamPool {
                 bail!("TCP URL `{url}` has no port");
             };
 
-            Ok(TcpStream::connect((host, port))?)
+            let mut failure = None;
+
+            for addr in (host, port).to_socket_addrs()? {
+                match TcpStream::connect_timeout(&addr, timeout) {
+                    Ok(stream) => {
+                        stream.set_read_timeout(Some(timeout))?;
+                        stream.set_write_timeout(Some(timeout))?;
+                        return Ok(stream);
+                    }
+                    Err(err) => failure = Some(err),
+                }
+            }
+
+            match failure {
+                Some(err) => Err(err.into()),
+                None => bail!("TCP URL `{url}` resolves to no address"),
+            }
         })
     }
 
@@ -191,7 +220,12 @@ impl DiscoveryStreamPool {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::TcpStream, string::ToString};
+    use std::{
+        net::{TcpListener, TcpStream},
+        string::ToString,
+        thread,
+        time::{Duration, Instant},
+    };
 
     use anyhow::{Result, bail};
     use url::Url;
@@ -209,5 +243,28 @@ mod tests {
         let err = pool.get(&url).err().unwrap();
 
         assert!(err.to_string().starts_with("No stream factory"));
+    }
+
+    #[test]
+    fn the_tcp_stream_gives_up_on_a_silent_peer() {
+        // A peer that accepts, says nothing for two seconds, then closes.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let peer = listener.accept();
+            thread::sleep(Duration::from_secs(2));
+            drop(peer);
+        });
+
+        let timeout = Duration::from_millis(200);
+        let mut pool = DiscoveryStreamPool::new().with_tcp_factory(timeout);
+        let url = Url::parse(&format!("tcp://127.0.0.1:{port}")).unwrap();
+        let stream = pool.get(&url).unwrap();
+
+        let started = Instant::now();
+        let read = stream.read(&mut [0; 16]);
+
+        assert!(read.is_err(), "read ended on {read:?}, not on its deadline");
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

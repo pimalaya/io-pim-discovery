@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `DiscoveryDavResolveOutput`, the context root and whether an SRV record named its origin.
 - Added `DiscoveryJmapResolveOutput`, the session resource and whether an SRV record named its origin.
+- Added `DiscoveryStreamPool::with_tcp_factory`, the `tcp` factory with a timeout of the caller's choice.
 
 ### Changed
 
@@ -30,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Changed `DiscoveryJmapResolve` to return `DiscoveryJmapResolveOutput`.
 - **BREAKING**: Changed `DiscoveryServiceConfig::from_autoconfig`, `from_dav` and `from_jmap` to take the trust.
 - **BREAKING**: Changed `DiscoveryKnownProvider::configs` to take the trust.
+- **BREAKING**: Changed `DiscoveryComposeClientStdError` to carry `InvalidDomain`.
+
+  `check_resolver` and every `compose_*` return it for an input whose domain is not a host name, before any request.
+
+- Changed the single-mechanism entry points of the compose client to yield nothing for a domain that is not a host name.
 - Changed `DiscoveryConfigCollector::finish` to list the encrypted endpoints first.
 - Changed `DiscoveryServiceConfig::probe_urls` to return nothing for an endpoint that is not `https`.
 
@@ -48,6 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the redirect walk following any URL scheme.
 
   A redirect is followed to `https`, or to `http` from an `http` URL.
+
+- Fixed `compose_all_within` running its auth probe and OAuth resolution past the deadline.
+
+  Both passes get what is left of it, and none starts once nothing is left.
+
+- Fixed the default DNS-over-TCP stream waiting without limit on a silent resolver.
+
+  A connect, a read or a write gives up after ten seconds.
+
+- Fixed `DiscoveryIsp::main_url` writing the address unencoded into the query.
+
+  A `+`, `&` or `#` in the local part reaches the server as written.
+
+- Fixed URLs being built from a domain that is not a host name.
+
+  The `DiscoveryIsp` URL helpers, `DiscoveryPacc::url` and the DAV and JMAP resolutions fail on a domain carrying a port, a path or a query.
 
 ## [0.11.0] - 2026-11-04
 

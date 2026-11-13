@@ -31,7 +31,7 @@ use alloc::{
 
 use log::{debug, trace};
 use thiserror::Error;
-use url::Url;
+use url::{Host, Url};
 
 use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
@@ -47,8 +47,8 @@ pub enum DiscoveryJmapResolveError {
     /// An error occurred during the `.well-known/jmap` probe step.
     #[error(transparent)]
     DiscoveryWellKnown(#[from] DiscoveryJmapWellKnownError),
-    /// The SRV record yielded a host/port that produced a URL that
-    /// could not be parsed.
+    /// The domain or the SRV record yielded a host/port that is not a
+    /// host name, or a URL that could not be parsed.
     #[error("RFC 8620 resolve built an invalid origin URL `{0}`: {1}")]
     InvalidOrigin(String, #[source] url::ParseError),
     /// No JMAP session resource was found at the resolved origin.
@@ -93,6 +93,11 @@ impl DiscoveryJmapResolve {
         // RFC 8620 §2.2: the session resource is always HTTPS,
         // whatever the SRV record's port.
         let raw = format!("https://{host}:{port}/");
+
+        if let Err(err) = Host::parse(&host) {
+            return Err(DiscoveryJmapResolveError::InvalidOrigin(raw, err));
+        }
+
         Url::parse(&raw).map_err(|err| DiscoveryJmapResolveError::InvalidOrigin(raw, err))
     }
 
@@ -235,6 +240,19 @@ mod tests {
                 DiscoveryCoroutineState::Complete(res) => return res.unwrap(),
             }
         }
+    }
+
+    #[test]
+    fn a_domain_that_is_not_a_host_name_builds_no_origin() {
+        let resolver = Url::parse("tcp://1.1.1.1:53").unwrap();
+        let resolve = DiscoveryJmapResolve::new("example.org:8443/x?", resolver);
+
+        assert!(resolve.origin(None).is_err());
+        assert!(
+            resolve
+                .origin(Some(("jmap.example.net/x?".into(), 443)))
+                .is_err()
+        );
     }
 
     #[test]

@@ -34,7 +34,7 @@ use alloc::{
 
 use log::{debug, trace};
 use thiserror::Error;
-use url::Url;
+use url::{Host, Url};
 
 use crate::{
     coroutine::{DiscoveryCoroutine, DiscoveryCoroutineState, DiscoveryYield},
@@ -64,7 +64,7 @@ pub enum DiscoveryDavResolveError {
     #[error(transparent)]
     Context(#[from] DiscoveryDavContextError),
     /// The scheme + host + port assembled from SRV records did not
-    /// form a valid URL.
+    /// form a valid URL, or the host is not a host name.
     #[error("RFC 6764 resolve built an invalid origin URL `{0}`: {1}")]
     InvalidOrigin(String, #[source] url::ParseError),
     /// Joining the TXT `path` value onto the origin URL failed.
@@ -146,6 +146,11 @@ impl DiscoveryDavResolve {
         };
 
         let raw = format!("{scheme}://{host}:{port}/");
+
+        if let Err(err) = Host::parse(host) {
+            return Err(DiscoveryDavResolveError::InvalidOrigin(raw, err));
+        }
+
         Url::parse(&raw).map_err(|err| DiscoveryDavResolveError::InvalidOrigin(raw, err))
     }
 }
@@ -370,6 +375,15 @@ mod tests {
     #[test]
     fn secure_only_ignores_the_plain_record() {
         assert_eq!(origin(true).as_str(), "https://example.com/");
+    }
+
+    #[test]
+    fn a_domain_that_is_not_a_host_name_builds_no_origin() {
+        let resolver = Url::parse("tcp://1.1.1.1:53").unwrap();
+        let service = DiscoveryDavService::Caldav;
+        let resolve = DiscoveryDavResolve::new("example.org:8443/x?", service, resolver);
+
+        assert!(resolve.origin(None).is_err());
     }
 
     /// A DNS-over-TCP answer: one SRV record naming `target` on port

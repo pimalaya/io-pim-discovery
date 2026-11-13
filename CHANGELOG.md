@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A DNS answer whose response code is neither `NOERROR` nor `NXDOMAIN` fails the lookup instead of reading as no record.
 
+- **BREAKING**: Changed the io-http dependency to 0.7.
+
+  Every probe skips interim 1xx responses, checks chunk terminators and reads trailers.
+
 - Changed `DiscoveryKnownProvider::from_domain` to match a Microsoft label right under a public suffix only.
 
   `live.example.org` is no longer taken for a Microsoft domain.

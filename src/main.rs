@@ -28,7 +28,7 @@ use pimalaya_cli::{
     long_version,
     printer::{Printer, StdoutPrinter},
 };
-use pimalaya_stream::tls::{Rustls, RustlsCrypto, Tls, TlsProvider};
+use pimalaya_stream::tls::{Rustls, RustlsCrypto, Tls, TlsProvider, TlsServer};
 use simd_cpu::SimdCpu;
 
 fn main() {
@@ -123,7 +123,8 @@ impl From<TlsFlags> for Tls {
                 crypto: flags.rustls_crypto.map(Into::into),
                 alpn: vec!["http/1.1".into()],
             },
-            cert: flags.tls_cert,
+            server: flags.tls_cert.map(|cert| TlsServer { cert }),
+            client: None,
         }
     }
 }

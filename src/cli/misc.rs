@@ -17,7 +17,7 @@ use serde::Serialize;
 use url::Url;
 
 use crate::{
-    cli::common::{ServerArg, table},
+    cli::common::{ServerArg, columns},
     compose::config::{DiscoveryService, DiscoveryServiceConfig},
     rfc8414::DiscoveryOauthServerMetadata,
     rfc9728::DiscoveryOauthResourceMetadata,
@@ -108,7 +108,7 @@ impl AuthCommand {
 }
 
 /// The `all` output: configs grouped into domain sections, each
-/// rendered as its own table.
+/// printed as its own aligned columns.
 #[derive(Serialize)]
 #[serde(transparent)]
 struct AllOutput(Vec<DiscoveryServiceConfig>);
@@ -170,7 +170,7 @@ impl fmt::Display for AllOutput {
             first = false;
 
             writeln!(f, "{label}")?;
-            writeln!(f, "{}", table(&configs))?;
+            write!(f, "{}", columns(&configs))?;
         }
 
         Ok(())
@@ -187,7 +187,7 @@ struct AuthOutput {
 impl fmt::Display for AuthOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.schemes.is_empty() {
-            return write!(f, "No authentication scheme advertised by {}", self.url);
+            return writeln!(f, "No authentication scheme advertised by {}", self.url);
         }
 
         writeln!(f, "Authentication schemes advertised by {}:", self.url)?;
@@ -211,7 +211,7 @@ struct ServerOutput {
 impl fmt::Display for ServerOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(metadata) = &self.metadata else {
-            return write!(
+            return writeln!(
                 f,
                 "No authorization server metadata found for {}",
                 self.issuer
@@ -258,7 +258,7 @@ struct ResourceOutput {
 impl fmt::Display for ResourceOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(metadata) = &self.metadata else {
-            return write!(
+            return writeln!(
                 f,
                 "No protected resource metadata found for {}",
                 self.resource

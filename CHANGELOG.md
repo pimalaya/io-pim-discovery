@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: Changed the pimalaya-cli dependency of the `cli` feature to 0.6.
+
+  The `cli` commands take its `printer::Printer`, and `cli::common::table` became `cli::common::columns`, returning its `columns::Columns` in place of a comfy-table `Table`.
+
+- Changed the CLI to print a config list as borderless aligned columns instead of a bordered table: `SERVICE`, `ENDPOINT`, `USERNAME`, `SOURCE`, `TRUST`, then `AUTH`, the longest, last.
+
+  The endpoint, the username and the auth methods, read from the network, print with their control characters replaced.
+
+- Changed the CLI to print the failure object coded `usage-invalid` on stdout when it refuses a command line holding `--json`, still exiting 2.
+- Changed the CLI to report a logger that fails to start as a failure, exiting 1, instead of panicking.
+
+### Fixed
+
+- Fixed the `auth http`, `auth server` and `auth resource` texts ending without a newline when nothing was found.
+
 ## [0.13.0] - 2026-11-15
 
 ### Changed

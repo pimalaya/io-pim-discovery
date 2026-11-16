@@ -1,5 +1,5 @@
 //! Shared CLI helpers: the DNS resolver flag, the per-domain service
-//! sets, and the service-config table output.
+//! sets, and the service-config list output.
 
 use std::{
     fmt,
@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::Result;
 use clap::Args;
-use pimalaya_cli::table::{Cell, ContentArrangement, Table, presets::UTF8_FULL};
+use pimalaya_cli::{columns::Columns, sanitize};
 use pimalaya_stream::tls::Tls;
 
 use crate::{
@@ -100,7 +100,7 @@ pub fn only(
         .collect()
 }
 
-/// The service-config table output, wrapping a raw (unmerged) config
+/// The service-config list output, wrapping a raw (unmerged) config
 /// list.
 #[derive(serde::Serialize)]
 #[serde(transparent)]
@@ -108,39 +108,36 @@ pub struct ConfigsOutput(pub Vec<DiscoveryServiceConfig>);
 
 impl fmt::Display for ConfigsOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", table(&self.0))
+        write!(f, "{}", columns(&self.0))
     }
 }
 
-/// Renders a service-config table: SERVICE, ENDPOINT, USERNAME, AUTH,
-/// the SOURCE mechanism that produced each row and its TRUST.
-pub fn table(configs: &[DiscoveryServiceConfig]) -> Table {
-    let mut table = Table::new();
-
-    table
-        .load_style(UTF8_FULL)
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![
-            Cell::new("SERVICE"),
-            Cell::new("ENDPOINT"),
-            Cell::new("USERNAME"),
-            Cell::new("AUTH"),
-            Cell::new("SOURCE"),
-            Cell::new("TRUST"),
-        ]);
+/// Renders a service-config list as aligned columns: SERVICE,
+/// ENDPOINT, USERNAME, the SOURCE mechanism that produced each row, its
+/// TRUST, then AUTH, the longest, last.
+///
+/// The endpoint, the username and the auth methods come from the
+/// network, so they are sanitized before they reach the terminal.
+pub fn columns(configs: &[DiscoveryServiceConfig]) -> Columns<'static> {
+    let header = ["SERVICE", "ENDPOINT", "USERNAME", "SOURCE", "TRUST", "AUTH"];
+    let mut columns = Columns::new(header);
 
     for config in configs {
-        table.add_row(vec![
-            Cell::new(service_name(config.service)),
-            Cell::new(endpoint_label(&config.endpoint)),
-            Cell::new(config.username.as_deref().unwrap_or("-")),
-            Cell::new(auth_label(&config.auth)),
-            Cell::new(source_name(config.source)),
-            Cell::new(trust_name(config.trust)),
+        let endpoint = endpoint_label(&config.endpoint);
+        let username = config.username.as_deref().unwrap_or_default();
+        let auth = auth_label(&config.auth);
+
+        columns.push([
+            service_name(config.service),
+            sanitize::text(&endpoint).as_ref(),
+            sanitize::text(username).as_ref(),
+            source_name(config.source),
+            trust_name(config.trust),
+            sanitize::text(&auth).as_ref(),
         ]);
     }
 
-    table
+    columns
 }
 
 /// Wire name of a service.
@@ -225,5 +222,53 @@ fn trust_name(trust: DiscoveryConfigTrust) -> &'static str {
         DiscoveryConfigTrust::Domain => "domain",
         DiscoveryConfigTrust::ThirdParty => "third-party",
         DiscoveryConfigTrust::Unauthenticated => "unauthenticated",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{string::ToString, vec};
+
+    use crate::{
+        cli::common::ConfigsOutput,
+        compose::config::{
+            DiscoveryAuthMethod, DiscoveryConfigSource, DiscoveryConfigTrust, DiscoveryEndpoint,
+            DiscoverySecurity, DiscoveryService, DiscoveryServiceConfig,
+        },
+    };
+
+    #[test]
+    fn prints_configs_as_columns_with_network_values_sanitized() {
+        let configs = vec![
+            DiscoveryServiceConfig {
+                service: DiscoveryService::Imap,
+                endpoint: DiscoveryEndpoint::Tcp {
+                    host: "imap.example.org".into(),
+                    port: 993,
+                    security: DiscoverySecurity::Tls,
+                },
+                username: Some("a\u{1b}[2Jb".into()),
+                auth: vec![DiscoveryAuthMethod::Password],
+                source: DiscoveryConfigSource::Srv,
+                resolved: false,
+                trust: DiscoveryConfigTrust::Unauthenticated,
+            },
+            DiscoveryServiceConfig {
+                service: DiscoveryService::Jmap,
+                endpoint: DiscoveryEndpoint::Http("https://example.org/jmap".into()),
+                username: None,
+                auth: vec![],
+                source: DiscoveryConfigSource::Jmap,
+                resolved: false,
+                trust: DiscoveryConfigTrust::Domain,
+            },
+        ];
+
+        let expected = "\
+SERVICE  ENDPOINT                    USERNAME  SOURCE  TRUST            AUTH
+imap     imap.example.org:993 (SSL)  a\u{fffd}[2Jb    srv     unauthenticated  password
+jmap     https://example.org/jmap    -         jmap    domain           -
+";
+        assert_eq!(ConfigsOutput(configs).to_string(), expected);
     }
 }

@@ -9,6 +9,9 @@
 //! next to the top-level `all` and `auth` commands; the command structs
 //! live in the library's cli module, this binary only wires them to the
 //! clap parser, the logger and the printer.
+//!
+//! A command line clap refuses exits 2, a failure prints the failure
+//! object and exits 1.
 
 use std::path::PathBuf;
 
@@ -21,7 +24,8 @@ use io_pim_discovery::cli::{
 use pimalaya_cli::{
     clap::{
         args::{JsonFlag, LogFlags},
-        commands::{CompletionCommand, ManualCommand},
+        commands::{completion::CompletionCommand, manual::ManualCommand},
+        parse,
     },
     error::ErrorReport,
     log::Logger,
@@ -36,14 +40,18 @@ fn main() {
     // runs the installed CPU token, the portable baseline when none is.
     let _ = SimdCpu::install_detected();
 
-    let cli = Cli::parse();
-
-    Logger::try_init(&cli.log).expect("init logger");
+    let cli = parse::<Cli>();
     let mut printer = StdoutPrinter::new(&cli.json);
-    let tls = cli.tls.into();
 
-    let result = cli.command.execute(&mut printer, &tls);
+    let result = execute(cli, &mut printer);
     ErrorReport::eval(&mut printer, result)
+}
+
+/// Initializes the logger, then runs the parsed command.
+fn execute(cli: Cli, printer: &mut StdoutPrinter) -> Result<()> {
+    Logger::try_init(&cli.log)?;
+    let tls = cli.tls.into();
+    cli.command.execute(printer, &tls)
 }
 
 #[derive(Parser, Debug)]

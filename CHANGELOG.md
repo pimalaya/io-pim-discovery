@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Moved to io-http 0.9: `client` enables `io-http/client` and `std` enables `io-http/std`.
+- **BREAKING**: Removed the `srv` feature, an alias of `rfc6186`: name `rfc6186` instead.
 - **BREAKING**: Renamed the `client` feature, which gated the blocking clients, to `std`.
 
   A consumer naming it moves to the new name:

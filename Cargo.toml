@@ -18,13 +18,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["client", "rustls-ring"]
-client = ["dep:io-http", "dep:url"]
-std = ["client", "dep:anyhow", "io-http/client", "dep:resolv-conf", "dep:ipconfig"]
+client = ["dep:io-http", "io-http/client", "dep:url"]
+std = ["client", "dep:anyhow", "io-http/std", "dep:resolv-conf", "dep:ipconfig"]
 stream = ["std", "dep:pimalaya-stream"]
 cli = ["stream", "autoconfig", "pacc", "rfc6186", "rfc6764", "rfc8620", "rfc8414", "rfc9728", "dep:clap", "dep:simd-cpu", "pimalaya-cli/terminal"]
 autoconfig = ["client", "dep:domain", "dep:psl", "dep:serde", "dep:serde-xml-rs"]
 pacc = ["client", "dep:domain", "dep:psl", "dep:serde", "dep:serde_json", "dep:base64-codec", "dep:sha2", "dep:subtle"]
-srv = ["rfc6186"]
 rfc6186 = ["client", "dep:domain", "dep:psl", "dep:serde"]
 rfc6764 = ["client", "dep:serde", "rfc6186"]
 rfc8414 = ["client", "dep:serde", "dep:serde_json", "url/serde"]
@@ -68,7 +67,7 @@ anyhow = { version = "1", default-features = false, optional = true }
 base64-codec = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
 clap = { version = "4.4", features = ["derive", "wrap_help"], optional = true }
 domain = { version = "=0.12.3", default-features = false, features = ["alloc", "unstable-new"], optional = true }
-io-http = { version = "0.8", default-features = false, optional = true }
+io-http = { version = "0.9", default-features = false, optional = true }
 log = { version = "0.4", default-features = false }
 pimalaya-cli = { version = "0.6", default-features = false, optional = true }
 psl = { version = "2", default-features = false, features = ["helpers"], optional = true }

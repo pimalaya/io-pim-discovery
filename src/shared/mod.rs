@@ -5,7 +5,7 @@
 pub mod dns;
 #[cfg(any(feature = "autoconfig", feature = "pacc"))]
 pub mod http;
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 pub mod pool;
 #[cfg(any(feature = "rfc6764", feature = "rfc8620"))]
 pub mod walk;

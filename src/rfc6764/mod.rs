@@ -14,7 +14,7 @@
 //! [`well_known`]: crate::rfc6764::well_known
 //! [`resolve`]: crate::rfc6764::resolve
 
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 pub mod client;
 pub mod context;
 pub mod discover;

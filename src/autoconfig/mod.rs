@@ -1,6 +1,6 @@
 //! Mozilla Thunderbird autoconfiguration discovery.
 
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 pub mod client;
 pub mod cname;
 pub mod isp;

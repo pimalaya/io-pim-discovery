@@ -14,10 +14,12 @@
 //! Like the rest of the io-* family the crate is layered. The
 //! coroutine layer is no_std state machines that emit read and write
 //! requests without performing any I/O, one module per mechanism or
-//! RFC. The client layer wraps them into standard, blocking clients
-//! over a stream. The CLI layer, behind the cli feature, exposes
-//! discovery as a command-line binary. One mechanism needs std without
-//! the client layer: autoconfig, whose XML parser is a std crate.
+//! RFC, behind the client feature. The std layer wraps them into
+//! standard, blocking clients over a stream, and the stream feature
+//! adds the ones opening their own connections. The CLI layer, behind
+//! the cli feature, exposes discovery as a command-line binary. One
+//! mechanism needs std without the std layer: autoconfig, whose XML
+//! parser is a std crate.
 //!
 //! The compose module reduces the individual mechanisms into a single
 //! ranked list of service configurations, and the shared module holds
@@ -27,7 +29,7 @@
 #[allow(unused_imports)]
 #[macro_use]
 extern crate alloc;
-#[cfg(any(feature = "client", feature = "cli"))]
+#[cfg(feature = "std")]
 extern crate std;
 
 #[cfg(feature = "autoconfig")]
@@ -46,15 +48,8 @@ pub mod cli;
     feature = "rfc8620"
 ))]
 pub mod compose;
-#[cfg(any(
-    feature = "autoconfig",
-    feature = "pacc",
-    feature = "rfc6186",
-    feature = "rfc6764",
-    feature = "rfc8620",
-    feature = "rfc8414",
-    feature = "rfc9728"
-))]
+#[cfg(feature = "client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 pub mod coroutine;
 #[cfg(feature = "pacc")]
 pub mod pacc;

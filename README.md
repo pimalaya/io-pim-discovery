@@ -4,9 +4,9 @@ PIM discovery CLI and client library for Rust
 
 This project is composed of 3 feature-gated layers:
 
-- Low-level **I/O-free** coroutines: no_std state machines containing the whole discovery logic, usable anywhere
-- Mid-level **clients**, based on coroutines (standard, blocking)
-- High-level **CLI**, based on the std clients
+- Low-level **I/O-free** coroutines: no_std state machines containing the whole discovery logic, usable anywhere (`client` feature, plus one feature per mechanism, each implying `client`)
+- Mid-level **clients**, based on coroutines (standard, blocking; `std` feature, `stream` adds the connecting clients, and `rustls-ring`, `rustls-aws` or `native-tls` select their TLS provider, each implying `std`)
+- High-level **CLI**, based on the std clients (`cli` feature)
 
 ## Table of contents
 

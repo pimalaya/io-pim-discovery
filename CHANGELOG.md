@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: Renamed the `client` feature, which gated the blocking clients, to `std`.
+
+  A consumer naming it moves to the new name:
+
+  ```toml
+  # before
+  io-pim-discovery = { version = "0.14", default-features = false, features = ["pacc", "client"] }
+  # after
+  io-pim-discovery = { version = "0.15", default-features = false, features = ["pacc", "std"] }
+  ```
+
+- **BREAKING**: Changed the `client` feature to gate the coroutine layer (the `coroutine` module) and the io-http and url dependencies. Every mechanism feature implies it, so a consumer naming a mechanism changes nothing.
+- **BREAKING**: Changed the `stream` feature and the TLS features (`rustls-ring`, `rustls-aws`, `native-tls`) to imply `std`.
+- Changed the default features to name `client` beside `rustls-ring`.
+
 ### Fixed
 
 - Fixed install.sh saving an HTTP error page as the archive and letting `tar` fail on it: it downloads with `curl -fsSLo` and stops on the error.

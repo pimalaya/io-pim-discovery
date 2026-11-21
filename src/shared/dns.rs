@@ -23,7 +23,7 @@ use alloc::{
     vec::Vec,
 };
 
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 use std::net::IpAddr;
 
 use domain::{
@@ -561,7 +561,7 @@ impl DiscoveryCoroutine for DiscoveryDnsProbe {
 /// `/etc/resolv.conf` on unix and from the network adapters on windows.
 /// Returns `None` when no nameserver can be determined; callers fall
 /// back to a default resolver.
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 pub fn system_resolver() -> Option<Url> {
     use alloc::format;
 
@@ -574,7 +574,7 @@ pub fn system_resolver() -> Option<Url> {
 }
 
 /// First nameserver listed in `/etc/resolv.conf`.
-#[cfg(all(feature = "client", unix))]
+#[cfg(all(feature = "std", unix))]
 fn system_nameserver() -> Option<IpAddr> {
     use std::fs;
 
@@ -594,7 +594,7 @@ fn system_nameserver() -> Option<IpAddr> {
 }
 
 /// First DNS server reported by the system network adapters.
-#[cfg(all(feature = "client", windows))]
+#[cfg(all(feature = "std", windows))]
 fn system_nameserver() -> Option<IpAddr> {
     let adapters = ipconfig::get_adapters().ok()?;
 
